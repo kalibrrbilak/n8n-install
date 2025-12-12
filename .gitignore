@@ -1,0 +1,36 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# Backups
+backups/
+
+# Node modules
+node_modules/
+
+# Docker volumes
+n8n_data/
+postgres_data/
+redis_data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SSL certificates
+*.pem
+*.key
+*.crt
+acme.json
