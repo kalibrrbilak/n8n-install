@@ -44,27 +44,77 @@ echo ""
 read -p "Telegram Bot Token: " TG_BOT_TOKEN
 read -p "Telegram User ID (ваш ID): " TG_USER_ID
 
+# Валидация введённых данных
+if [[ -z "$DOMAIN" ]]; then
+    log_error "Домен не может быть пустым"
+    exit 1
+fi
+
+if [[ -z "$EMAIL" ]]; then
+    log_error "Email не может быть пустым"
+    exit 1
+fi
+
+if [[ -z "$DB_PASSWORD" ]]; then
+    log_error "Пароль базы данных не может быть пустым"
+    exit 1
+fi
+
+if [[ -z "$TG_BOT_TOKEN" ]]; then
+    log_warning "Telegram Bot Token не указан - бот не будет работать"
+fi
+
+if [[ -z "$TG_USER_ID" ]]; then
+    log_warning "Telegram User ID не указан - бот не будет работать"
+fi
+
+# Проверка формата email
+if ! echo "$EMAIL" | grep -qE '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'; then
+    log_error "Некорректный формат email: $EMAIL"
+    exit 1
+fi
+
 # Генерация ключа шифрования
-ENCRYPTION_KEY=$(openssl rand -hex 32)
-log_info "Сгенерирован ключ шифрования"
+log_info "Генерация ключа шифрования..."
+if ! command -v openssl &>/dev/null; then
+    log_error "openssl не установлен. Установите его: apt-get install openssl"
+    exit 1
+fi
+
+ENCRYPTION_KEY=$(openssl rand -hex 32 2>&1)
+if [[ $? -ne 0 ]] || [[ -z "$ENCRYPTION_KEY" ]]; then
+    log_error "Не удалось сгенерировать ключ шифрования: $ENCRYPTION_KEY"
+    exit 1
+fi
+log_success "Ключ шифрования сгенерирован"
 
 # Директория установки
 INSTALL_DIR="/opt/main"
 REPO_URL="https://github.com/kalibrrbilak/n8n-install.git"
 
 log_info "Обновление системы..."
-apt-get update -qq
-apt-get upgrade -y -qq
+if ! apt-get update -qq 2>&1; then
+    log_error "Не удалось обновить список пакетов. Проверьте подключение к интернету и репозитории."
+    exit 1
+fi
+
+if ! apt-get upgrade -y -qq 2>&1; then
+    log_warning "Не удалось обновить некоторые пакеты, продолжаем..."
+fi
 
 log_info "Установка зависимостей..."
-apt-get install -y -qq \
+if ! apt-get install -y -qq \
     apt-transport-https \
     ca-certificates \
     curl \
     gnupg \
     lsb-release \
     git \
-    jq
+    jq 2>&1; then
+    log_error "Не удалось установить необходимые зависимости"
+    exit 1
+fi
+log_success "Зависимости установлены"
 
 # ============================================================
 # Установка Docker Engine v29
@@ -77,30 +127,68 @@ for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker c
 done
 
 # Добавление репозитория Docker
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-chmod a+r /etc/apt/keyrings/docker.asc
+log_info "Добавление репозитория Docker..."
+if ! install -m 0755 -d /etc/apt/keyrings 2>&1; then
+    log_error "Не удалось создать директорию /etc/apt/keyrings"
+    exit 1
+fi
 
-echo \
+if ! curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc 2>&1; then
+    log_error "Не удалось загрузить GPG ключ Docker. Проверьте подключение к интернету."
+    exit 1
+fi
+
+if ! chmod a+r /etc/apt/keyrings/docker.asc 2>&1; then
+    log_error "Не удалось установить права доступа на GPG ключ Docker"
+    exit 1
+fi
+
+if ! echo \
   "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
   $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
-  tee /etc/apt/sources.list.d/docker.list > /dev/null
+  tee /etc/apt/sources.list.d/docker.list > /dev/null 2>&1; then
+    log_error "Не удалось добавить репозиторий Docker"
+    exit 1
+fi
 
-apt-get update -qq
+if ! apt-get update -qq 2>&1; then
+    log_error "Не удалось обновить список пакетов после добавления репозитория Docker"
+    exit 1
+fi
 
 # Установка Docker (последняя версия v29)
-apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+log_info "Установка Docker Engine..."
+if ! apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>&1; then
+    log_error "Не удалось установить Docker. Проверьте логи: journalctl -xe"
+    exit 1
+fi
 
 # Проверка Docker
-if ! docker --version; then
-    log_error "Docker не установлен"
+if ! docker --version &>/dev/null; then
+    log_error "Docker установлен, но команда docker не работает"
     exit 1
 fi
 log_success "Docker установлен: $(docker --version)"
 
 # Запуск Docker
-systemctl enable docker
-systemctl start docker
+log_info "Запуск Docker сервиса..."
+if ! systemctl enable docker 2>&1; then
+    log_error "Не удалось включить автозапуск Docker"
+    exit 1
+fi
+
+if ! systemctl start docker 2>&1; then
+    log_error "Не удалось запустить Docker. Проверьте статус: systemctl status docker"
+    exit 1
+fi
+
+# Проверка что Docker работает
+sleep 2
+if ! systemctl is-active --quiet docker; then
+    log_error "Docker сервис не запущен. Проверьте логи: journalctl -u docker"
+    exit 1
+fi
+log_success "Docker сервис запущен"
 
 # ============================================================
 # Клонирование репозитория
@@ -889,27 +977,56 @@ mkdir -p "$INSTALL_DIR/backups"
 # Запуск контейнеров
 # ============================================================
 log_info "Запуск Docker контейнеров..."
-cd "$INSTALL_DIR"
-docker compose build
-docker compose up -d
+cd "$INSTALL_DIR" || {
+    log_error "Не удалось перейти в директорию $INSTALL_DIR"
+    exit 1
+}
+
+log_info "Сборка образов Docker..."
+if ! docker compose build 2>&1; then
+    log_error "Не удалось собрать Docker образы. Проверьте docker-compose.yml"
+    exit 1
+fi
+log_success "Образы собраны"
+
+log_info "Запуск контейнеров..."
+if ! docker compose up -d 2>&1; then
+    log_error "Не удалось запустить контейнеры. Проверьте логи: docker compose logs"
+    exit 1
+fi
+log_success "Контейнеры запущены"
 
 # Ожидание запуска
 log_info "Ожидание запуска сервисов (до 120 секунд)..."
+n8n_started=false
 for i in {1..24}; do
     sleep 5
     if docker exec n8n wget --spider -q http://localhost:5678/healthz 2>/dev/null; then
-        log_success "n8n запущен!"
+        log_success "n8n запущен и отвечает на запросы!"
+        n8n_started=true
         break
     fi
     echo -n "."
 done
 echo ""
 
+if [[ "$n8n_started" == "false" ]]; then
+    log_error "n8n не запустился в течение 120 секунд"
+    log_error "Проверьте логи: docker compose logs n8n"
+    log_error "Проверьте статус: docker compose ps"
+    exit 1
+fi
+
 # ============================================================
 # Настройка cron для бэкапов
 # ============================================================
 log_info "Настройка автоматических бэкапов..."
-(crontab -l 2>/dev/null | grep -v "backup_n8n.sh"; echo "0 2 * * * cd $INSTALL_DIR && ./backup_n8n.sh >> ./logs/backup.log 2>&1") | crontab -
+if (crontab -l 2>/dev/null | grep -v "backup_n8n.sh"; echo "0 2 * * * cd $INSTALL_DIR && ./backup_n8n.sh >> ./logs/backup.log 2>&1") | crontab - 2>&1; then
+    log_success "Автоматические бэкапы настроены (ежедневно в 2:00)"
+else
+    log_warning "Не удалось настроить автоматические бэкапы через cron"
+    log_warning "Вы можете настроить их вручную позже"
+fi
 
 # ============================================================
 # Финальная проверка
@@ -936,8 +1053,10 @@ echo ""
 
 # Отправка уведомления в Telegram
 if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_USER_ID" ]; then
+    log_info "Отправка уведомления в Telegram..."
     N8N_VERSION=$(docker exec n8n n8n --version 2>/dev/null || echo "N/A")
-    curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+
+    if curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_USER_ID}" \
         -d "text=✅ n8n успешно установлен!
 
@@ -945,7 +1064,13 @@ if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_USER_ID" ]; then
 📦 Версия: ${N8N_VERSION}
 
 Используйте /start для просмотра команд бота." \
-        -d "parse_mode=Markdown" > /dev/null 2>&1 || true
+        -d "parse_mode=Markdown" > /dev/null 2>&1; then
+        log_success "Уведомление отправлено в Telegram"
+    else
+        log_warning "Не удалось отправить уведомление в Telegram. Проверьте TG_BOT_TOKEN и TG_USER_ID"
+    fi
+else
+    log_info "Telegram бот не настроен (пропущено уведомление)"
 fi
 
 log_success "Готово!"

@@ -36,26 +36,41 @@ const isAuthorized = (msg) => {
 };
 
 /**
- * Выполнение команды с таймаутом
+ * Выполнение команды с таймаутом и улучшенной обработкой ошибок
  */
 const execCommand = (cmd, timeout = 60000) => {
     return new Promise((resolve, reject) => {
         const options = {
             timeout: timeout,
-            maxBuffer: 1024 * 1024 * 10, // 10MB
-            cwd: N8N_DIR
+            maxBuffer: 1024 * 1024 * 10 // 10MB
+            // Не используем cwd, так как бот работает внутри контейнера
         };
+
+        console.log(`[execCommand] Running: ${cmd.substring(0, 100)}...`);
 
         exec(cmd, options, (error, stdout, stderr) => {
             if (error) {
+                // Логируем ошибку для отладки
+                console.error(`[execCommand] Error executing command: ${cmd}`);
+                console.error(`[execCommand] Error details: ${error.message}`);
+                console.error(`[execCommand] stderr: ${stderr}`);
+
                 // Если это таймаут, возвращаем специальное сообщение
                 if (error.killed) {
-                    reject(new Error('Command timed out'));
+                    reject(new Error(`Команда превысила время ожидания (${timeout}ms)`));
+                } else if (error.code === 'ENOENT') {
+                    reject(new Error('Команда не найдена. Проверьте установку необходимых утилит.'));
+                } else if (error.code === 'EACCES') {
+                    reject(new Error('Недостаточно прав для выполнения команды'));
                 } else {
-                    reject(new Error(stderr || error.message));
+                    // Возвращаем более информативное сообщение
+                    const errorMsg = stderr.trim() || error.message;
+                    reject(new Error(errorMsg));
                 }
             } else {
-                resolve(stdout || stderr || 'OK');
+                const result = stdout || stderr || 'OK';
+                console.log(`[execCommand] Success. Output length: ${result.length} chars`);
+                resolve(result);
             }
         });
     });
@@ -122,7 +137,8 @@ bot.onText(/\/status/, async (msg) => {
     try {
         // Собираем информацию параллельно
         const [uptime, containers, disk, memory, n8nVersion] = await Promise.all([
-            execCommand('uptime -p').catch(() => 'N/A'),
+            // BusyBox uptime не поддерживает -p, используем обычный uptime
+            execCommand('uptime').catch(() => 'N/A'),
             execCommand('docker ps --format "{{.Names}}: {{.Status}}"').catch(() => 'N/A'),
             execCommand("df -h / | tail -1 | awk '{print $5\" used of \"$2}'").catch(() => 'N/A'),
             execCommand("free -h | grep Mem | awk '{print $3\" / \"$2}'").catch(() => 'N/A'),
@@ -165,6 +181,12 @@ bot.onText(/\/logs(?:\s+(\d+))?/, async (msg, match) => {
     const chatId = msg.chat.id;
     const lines = parseInt(match[1]) || 50;
 
+    // Валидация входных данных
+    if (lines < 1 || lines > 10000) {
+        await bot.sendMessage(chatId, '❌ Количество строк должно быть от 1 до 10000');
+        return;
+    }
+
     await bot.sendMessage(chatId, `⏳ Получаю последние ${lines} строк логов...`);
 
     try {
@@ -178,17 +200,39 @@ bot.onText(/\/logs(?:\s+(\d+))?/, async (msg, match) => {
         if (logs.length > 3900) {
             // Отправляем как файл
             const logPath = `/tmp/n8n_logs_${Date.now()}.txt`;
-            fs.writeFileSync(logPath, logs);
-            await bot.sendDocument(chatId, logPath, {
-                caption: `📋 Последние ${lines} строк логов n8n`
-            });
-            fs.unlinkSync(logPath);
+
+            try {
+                fs.writeFileSync(logPath, logs);
+
+                // Проверяем что файл создан
+                if (!fs.existsSync(logPath)) {
+                    throw new Error('Не удалось создать временный файл логов');
+                }
+
+                await bot.sendDocument(chatId, logPath, {
+                    caption: `📋 Последние ${lines} строк логов n8n`
+                });
+
+                // Удаляем временный файл
+                try {
+                    fs.unlinkSync(logPath);
+                } catch (unlinkError) {
+                    console.error(`Failed to delete temp log file: ${unlinkError.message}`);
+                }
+            } catch (fileError) {
+                console.error(`File operation error: ${fileError.message}`);
+                // Если не удалось создать файл, отправляем текстом (обрезано)
+                await bot.sendMessage(chatId, `📋 *Логи n8n (обрезано):*\n\`\`\`\n${logs.substring(0, 3800)}\n\`\`\``, {
+                    parse_mode: 'Markdown'
+                });
+            }
         } else {
             await bot.sendMessage(chatId, `📋 *Логи n8n:*\n\`\`\`\n${logs.substring(0, 3800)}\n\`\`\``, {
                 parse_mode: 'Markdown'
             });
         }
     } catch (error) {
+        console.error('Error in /logs command:', error);
         await bot.sendMessage(chatId, `❌ Ошибка получения логов: ${error.message}`);
     }
 });
@@ -268,24 +312,29 @@ bot.onText(/\/update/, async (msg) => {
         // Шаг 2: Создание бэкапа
         await bot.sendMessage(chatId, '💾 Создаю резервную копию перед обновлением...');
         try {
+            // Проверяем что скрипт бэкапа существует
+            if (!fs.existsSync(`${N8N_DIR}/backup_n8n.sh`)) {
+                throw new Error('Скрипт backup_n8n.sh не найден');
+            }
+
             await execCommand(`${N8N_DIR}/backup_n8n.sh`, 300000);
             await bot.sendMessage(chatId, '✅ Бэкап создан');
         } catch (e) {
-            await bot.sendMessage(chatId, '⚠️ Не удалось создать бэкап, но продолжаю обновление...');
+            await bot.sendMessage(chatId, `⚠️ Не удалось создать бэкап: ${e.message}\nПродолжаю обновление...`);
             console.log('Backup error:', e.message);
         }
 
         // Шаг 3: Остановка n8n
         await bot.sendMessage(chatId, '⏹ Останавливаю n8n...');
-        await execCommand(`cd ${N8N_DIR} && docker compose stop n8n`, 60000);
+        await execCommand(`docker compose -f ${N8N_DIR}/docker-compose.yml stop n8n`, 60000);
 
         // Шаг 4: Пересборка образа
         await bot.sendMessage(chatId, '🔨 Пересобираю образ n8n (это может занять 5-10 минут)...');
-        await execCommand(`cd ${N8N_DIR} && docker compose build --no-cache n8n`, 600000);
+        await execCommand(`docker compose -f ${N8N_DIR}/docker-compose.yml build --pull n8n`, 600000);
 
         // Шаг 5: Запуск
         await bot.sendMessage(chatId, '🚀 Запускаю обновлённый n8n...');
-        await execCommand(`cd ${N8N_DIR} && docker compose up -d n8n`, 120000);
+        await execCommand(`docker compose -f ${N8N_DIR}/docker-compose.yml up -d n8n`, 120000);
 
         // Шаг 6: Ожидание запуска
         await bot.sendMessage(chatId, '⏳ Ожидаю запуска сервиса...');
@@ -301,7 +350,7 @@ bot.onText(/\/update/, async (msg) => {
 
         // Шаг 8: Очистка
         await bot.sendMessage(chatId, '🧹 Очищаю старые образы...');
-        await execCommand('docker image prune -f', 60000).catch(() => {});
+        await execCommand('docker image prune -a -f --filter "dangling=true"', 60000).catch(() => {});
 
         // Шаг 9: Проверка статуса
         const status = await execCommand('docker ps --filter name=n8n --format "{{.Status}}"').catch(() => 'unknown');

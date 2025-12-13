@@ -68,6 +68,24 @@ log_info "=========================================="
 log_info "    Резервное копирование n8n"
 log_info "=========================================="
 
+# Проверка что Docker запущен
+if ! systemctl is-active --quiet docker 2>/dev/null; then
+    log_error "Docker не запущен. Запустите его: systemctl start docker"
+    send_telegram "❌ Ошибка бэкапа: Docker не запущен"
+    exit 1
+fi
+
+# Проверка что контейнеры запущены
+if ! docker ps --format '{{.Names}}' | grep -q "^n8n-postgres$"; then
+    log_error "Контейнер n8n-postgres не запущен"
+    send_telegram "❌ Ошибка бэкапа: контейнер PostgreSQL не запущен"
+    exit 1
+fi
+
+if ! docker ps --format '{{.Names}}' | grep -q "^n8n$"; then
+    log_warning "Контейнер n8n не запущен (бэкап всё равно будет создан)"
+fi
+
 # ============================================================
 # Бэкап PostgreSQL
 # ============================================================
@@ -77,12 +95,26 @@ log_info "Создание дампа PostgreSQL..."
 POSTGRES_USER="${POSTGRES_USER:-n8n}"
 POSTGRES_DB="${POSTGRES_DB:-n8n}"
 
-if docker exec n8n-postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > "$BACKUP_PATH/database.sql" 2>/dev/null; then
-    DB_SIZE=$(du -h "$BACKUP_PATH/database.sql" | cut -f1)
-    log_success "Дамп PostgreSQL создан ($DB_SIZE)"
-else
-    log_warning "Не удалось создать дамп PostgreSQL"
+DUMP_ERROR=$(docker exec n8n-postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" 2>&1 > "$BACKUP_PATH/database.sql")
+DUMP_EXIT=$?
+
+if [ $DUMP_EXIT -ne 0 ]; then
+    log_error "Не удалось создать дамп PostgreSQL: $DUMP_ERROR"
+    send_telegram "❌ Ошибка создания дампа PostgreSQL"
+    rm -rf "$BACKUP_PATH"
+    exit 1
 fi
+
+# Проверка что дамп не пустой
+if [ ! -s "$BACKUP_PATH/database.sql" ]; then
+    log_error "Дамп PostgreSQL пустой"
+    send_telegram "❌ Ошибка: дамп PostgreSQL пустой"
+    rm -rf "$BACKUP_PATH"
+    exit 1
+fi
+
+DB_SIZE=$(du -h "$BACKUP_PATH/database.sql" | cut -f1)
+log_success "Дамп PostgreSQL создан ($DB_SIZE)"
 
 # ============================================================
 # Бэкап конфигурации n8n
@@ -90,11 +122,25 @@ fi
 
 log_info "Копирование конфигурации n8n..."
 
-if docker cp n8n:/home/node/.n8n "$BACKUP_PATH/n8n_data" 2>/dev/null; then
-    N8N_SIZE=$(du -sh "$BACKUP_PATH/n8n_data" 2>/dev/null | cut -f1)
-    log_success "Конфигурация n8n скопирована ($N8N_SIZE)"
+# Проверяем что контейнер n8n существует
+if ! docker ps -a --format '{{.Names}}' | grep -q "^n8n$"; then
+    log_warning "Контейнер n8n не существует, пропускаем копирование конфигурации"
 else
-    log_warning "Не удалось скопировать конфигурацию n8n"
+    CP_ERROR=$(docker cp n8n:/home/node/.n8n "$BACKUP_PATH/n8n_data" 2>&1)
+    CP_EXIT=$?
+
+    if [ $CP_EXIT -ne 0 ]; then
+        log_warning "Не удалось скопировать конфигурацию n8n: $CP_ERROR"
+        log_warning "Продолжаем создание бэкапа без конфигурации n8n"
+    else
+        # Проверка что данные скопированы
+        if [ -d "$BACKUP_PATH/n8n_data" ] && [ "$(ls -A $BACKUP_PATH/n8n_data 2>/dev/null)" ]; then
+            N8N_SIZE=$(du -sh "$BACKUP_PATH/n8n_data" 2>/dev/null | cut -f1)
+            log_success "Конфигурация n8n скопирована ($N8N_SIZE)"
+        else
+            log_warning "Директория конфигурации n8n пуста или не существует"
+        fi
+    fi
 fi
 
 # ============================================================
@@ -141,8 +187,29 @@ log_info "Сохранение информации о версиях..."
 
 log_info "Создание архива..."
 
-cd "$BACKUP_DIR"
-tar -czf "${BACKUP_NAME}.tar.gz" "$BACKUP_NAME"
+cd "$BACKUP_DIR" || {
+    log_error "Не удалось перейти в директорию $BACKUP_DIR"
+    send_telegram "❌ Ошибка создания архива"
+    exit 1
+}
+
+TAR_ERROR=$(tar -czf "${BACKUP_NAME}.tar.gz" "$BACKUP_NAME" 2>&1)
+TAR_EXIT=$?
+
+if [ $TAR_EXIT -ne 0 ]; then
+    log_error "Не удалось создать архив: $TAR_ERROR"
+    send_telegram "❌ Ошибка создания tar архива"
+    rm -rf "$BACKUP_NAME"
+    exit 1
+fi
+
+# Проверка что архив создан и не пустой
+if [ ! -s "${BACKUP_NAME}.tar.gz" ]; then
+    log_error "Архив пустой или не создан"
+    send_telegram "❌ Ошибка: архив бэкапа пустой"
+    rm -rf "$BACKUP_NAME"
+    exit 1
+fi
 
 ARCHIVE_SIZE=$(du -h "${BACKUP_NAME}.tar.gz" | cut -f1)
 log_success "Архив создан ($ARCHIVE_SIZE)"
@@ -154,14 +221,35 @@ log_success "Архив создан ($ARCHIVE_SIZE)"
 if [ -n "$N8N_ENCRYPTION_KEY" ]; then
     log_info "Шифрование архива..."
 
-    openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
-        -in "${BACKUP_NAME}.tar.gz" \
-        -out "${BACKUP_NAME}.tar.gz.enc" \
-        -pass pass:"$N8N_ENCRYPTION_KEY"
+    # Проверка что openssl установлен
+    if ! command -v openssl &>/dev/null; then
+        log_error "openssl не установлен, шифрование невозможно"
+        FINAL_BACKUP="${BACKUP_NAME}.tar.gz"
+        log_warning "Бэкап сохранён БЕЗ шифрования"
+    else
+        ENC_ERROR=$(openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
+            -in "${BACKUP_NAME}.tar.gz" \
+            -out "${BACKUP_NAME}.tar.gz.enc" \
+            -pass pass:"$N8N_ENCRYPTION_KEY" 2>&1)
+        ENC_EXIT=$?
 
-    rm "${BACKUP_NAME}.tar.gz"
-    FINAL_BACKUP="${BACKUP_NAME}.tar.gz.enc"
-    log_success "Архив зашифрован"
+        if [ $ENC_EXIT -ne 0 ]; then
+            log_error "Не удалось зашифровать архив: $ENC_ERROR"
+            FINAL_BACKUP="${BACKUP_NAME}.tar.gz"
+            log_warning "Бэкап сохранён БЕЗ шифрования"
+        else
+            # Проверка что зашифрованный файл создан
+            if [ ! -s "${BACKUP_NAME}.tar.gz.enc" ]; then
+                log_error "Зашифрованный файл пустой или не создан"
+                FINAL_BACKUP="${BACKUP_NAME}.tar.gz"
+                log_warning "Бэкап сохранён БЕЗ шифрования"
+            else
+                rm "${BACKUP_NAME}.tar.gz"
+                FINAL_BACKUP="${BACKUP_NAME}.tar.gz.enc"
+                log_success "Архив зашифрован"
+            fi
+        fi
+    fi
 else
     FINAL_BACKUP="${BACKUP_NAME}.tar.gz"
     log_warning "Шифрование пропущено (N8N_ENCRYPTION_KEY не задан)"
