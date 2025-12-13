@@ -42,8 +42,8 @@ const execCommand = (cmd, timeout = 60000) => {
     return new Promise((resolve, reject) => {
         const options = {
             timeout: timeout,
-            maxBuffer: 1024 * 1024 * 10, // 10MB
-            cwd: N8N_DIR
+            maxBuffer: 1024 * 1024 * 10 // 10MB
+            // Не используем cwd, так как бот работает внутри контейнера
         };
 
         console.log(`[execCommand] Running: ${cmd.substring(0, 100)}...`);
@@ -137,7 +137,8 @@ bot.onText(/\/status/, async (msg) => {
     try {
         // Собираем информацию параллельно
         const [uptime, containers, disk, memory, n8nVersion] = await Promise.all([
-            execCommand('uptime -p').catch(() => 'N/A'),
+            // BusyBox uptime не поддерживает -p, используем обычный uptime
+            execCommand('uptime').catch(() => 'N/A'),
             execCommand('docker ps --format "{{.Names}}: {{.Status}}"').catch(() => 'N/A'),
             execCommand("df -h / | tail -1 | awk '{print $5\" used of \"$2}'").catch(() => 'N/A'),
             execCommand("free -h | grep Mem | awk '{print $3\" / \"$2}'").catch(() => 'N/A'),
@@ -325,15 +326,15 @@ bot.onText(/\/update/, async (msg) => {
 
         // Шаг 3: Остановка n8n
         await bot.sendMessage(chatId, '⏹ Останавливаю n8n...');
-        await execCommand(`cd ${N8N_DIR} && docker compose stop n8n`, 60000);
+        await execCommand(`docker compose -f ${N8N_DIR}/docker-compose.yml stop n8n`, 60000);
 
         // Шаг 4: Пересборка образа
         await bot.sendMessage(chatId, '🔨 Пересобираю образ n8n (это может занять 5-10 минут)...');
-        await execCommand(`cd ${N8N_DIR} && docker compose build --no-cache n8n`, 600000);
+        await execCommand(`docker compose -f ${N8N_DIR}/docker-compose.yml build --pull n8n`, 600000);
 
         // Шаг 5: Запуск
         await bot.sendMessage(chatId, '🚀 Запускаю обновлённый n8n...');
-        await execCommand(`cd ${N8N_DIR} && docker compose up -d n8n`, 120000);
+        await execCommand(`docker compose -f ${N8N_DIR}/docker-compose.yml up -d n8n`, 120000);
 
         // Шаг 6: Ожидание запуска
         await bot.sendMessage(chatId, '⏳ Ожидаю запуска сервиса...');
@@ -349,7 +350,7 @@ bot.onText(/\/update/, async (msg) => {
 
         // Шаг 8: Очистка
         await bot.sendMessage(chatId, '🧹 Очищаю старые образы...');
-        await execCommand('docker image prune -f', 60000).catch(() => {});
+        await execCommand('docker image prune -a -f --filter "dangling=true"', 60000).catch(() => {});
 
         // Шаг 9: Проверка статуса
         const status = await execCommand('docker ps --filter name=n8n --format "{{.Status}}"').catch(() => 'unknown');
