@@ -36,7 +36,7 @@ const isAuthorized = (msg) => {
 };
 
 /**
- * Выполнение команды с таймаутом
+ * Выполнение команды с таймаутом и улучшенной обработкой ошибок
  */
 const execCommand = (cmd, timeout = 60000) => {
     return new Promise((resolve, reject) => {
@@ -46,16 +46,31 @@ const execCommand = (cmd, timeout = 60000) => {
             cwd: N8N_DIR
         };
 
+        console.log(`[execCommand] Running: ${cmd.substring(0, 100)}...`);
+
         exec(cmd, options, (error, stdout, stderr) => {
             if (error) {
+                // Логируем ошибку для отладки
+                console.error(`[execCommand] Error executing command: ${cmd}`);
+                console.error(`[execCommand] Error details: ${error.message}`);
+                console.error(`[execCommand] stderr: ${stderr}`);
+
                 // Если это таймаут, возвращаем специальное сообщение
                 if (error.killed) {
-                    reject(new Error('Command timed out'));
+                    reject(new Error(`Команда превысила время ожидания (${timeout}ms)`));
+                } else if (error.code === 'ENOENT') {
+                    reject(new Error('Команда не найдена. Проверьте установку необходимых утилит.'));
+                } else if (error.code === 'EACCES') {
+                    reject(new Error('Недостаточно прав для выполнения команды'));
                 } else {
-                    reject(new Error(stderr || error.message));
+                    // Возвращаем более информативное сообщение
+                    const errorMsg = stderr.trim() || error.message;
+                    reject(new Error(errorMsg));
                 }
             } else {
-                resolve(stdout || stderr || 'OK');
+                const result = stdout || stderr || 'OK';
+                console.log(`[execCommand] Success. Output length: ${result.length} chars`);
+                resolve(result);
             }
         });
     });
@@ -165,6 +180,12 @@ bot.onText(/\/logs(?:\s+(\d+))?/, async (msg, match) => {
     const chatId = msg.chat.id;
     const lines = parseInt(match[1]) || 50;
 
+    // Валидация входных данных
+    if (lines < 1 || lines > 10000) {
+        await bot.sendMessage(chatId, '❌ Количество строк должно быть от 1 до 10000');
+        return;
+    }
+
     await bot.sendMessage(chatId, `⏳ Получаю последние ${lines} строк логов...`);
 
     try {
@@ -178,17 +199,39 @@ bot.onText(/\/logs(?:\s+(\d+))?/, async (msg, match) => {
         if (logs.length > 3900) {
             // Отправляем как файл
             const logPath = `/tmp/n8n_logs_${Date.now()}.txt`;
-            fs.writeFileSync(logPath, logs);
-            await bot.sendDocument(chatId, logPath, {
-                caption: `📋 Последние ${lines} строк логов n8n`
-            });
-            fs.unlinkSync(logPath);
+
+            try {
+                fs.writeFileSync(logPath, logs);
+
+                // Проверяем что файл создан
+                if (!fs.existsSync(logPath)) {
+                    throw new Error('Не удалось создать временный файл логов');
+                }
+
+                await bot.sendDocument(chatId, logPath, {
+                    caption: `📋 Последние ${lines} строк логов n8n`
+                });
+
+                // Удаляем временный файл
+                try {
+                    fs.unlinkSync(logPath);
+                } catch (unlinkError) {
+                    console.error(`Failed to delete temp log file: ${unlinkError.message}`);
+                }
+            } catch (fileError) {
+                console.error(`File operation error: ${fileError.message}`);
+                // Если не удалось создать файл, отправляем текстом (обрезано)
+                await bot.sendMessage(chatId, `📋 *Логи n8n (обрезано):*\n\`\`\`\n${logs.substring(0, 3800)}\n\`\`\``, {
+                    parse_mode: 'Markdown'
+                });
+            }
         } else {
             await bot.sendMessage(chatId, `📋 *Логи n8n:*\n\`\`\`\n${logs.substring(0, 3800)}\n\`\`\``, {
                 parse_mode: 'Markdown'
             });
         }
     } catch (error) {
+        console.error('Error in /logs command:', error);
         await bot.sendMessage(chatId, `❌ Ошибка получения логов: ${error.message}`);
     }
 });
@@ -268,10 +311,15 @@ bot.onText(/\/update/, async (msg) => {
         // Шаг 2: Создание бэкапа
         await bot.sendMessage(chatId, '💾 Создаю резервную копию перед обновлением...');
         try {
+            // Проверяем что скрипт бэкапа существует
+            if (!fs.existsSync(`${N8N_DIR}/backup_n8n.sh`)) {
+                throw new Error('Скрипт backup_n8n.sh не найден');
+            }
+
             await execCommand(`${N8N_DIR}/backup_n8n.sh`, 300000);
             await bot.sendMessage(chatId, '✅ Бэкап создан');
         } catch (e) {
-            await bot.sendMessage(chatId, '⚠️ Не удалось создать бэкап, но продолжаю обновление...');
+            await bot.sendMessage(chatId, `⚠️ Не удалось создать бэкап: ${e.message}\nПродолжаю обновление...`);
             console.log('Backup error:', e.message);
         }
 

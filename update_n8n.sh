@@ -57,22 +57,54 @@ log_info "=========================================="
 log_info "    Обновление n8n"
 log_info "=========================================="
 
+# Проверка что Docker запущен
+log_info "Проверка Docker..."
+if ! systemctl is-active --quiet docker; then
+    log_error "Docker не запущен. Запустите его: systemctl start docker"
+    send_telegram "❌ Ошибка обновления: Docker не запущен"
+    exit 1
+fi
+
+# Проверка что контейнер n8n существует
+if ! docker ps -a --format '{{.Names}}' | grep -q "^n8n$"; then
+    log_error "Контейнер n8n не найден"
+    send_telegram "❌ Ошибка обновления: контейнер n8n не найден"
+    exit 1
+fi
+
 # Получение текущей версии
 log_info "Получение текущей версии n8n..."
-CURRENT_VERSION=$(docker exec n8n n8n --version 2>/dev/null || echo "unknown")
+if ! CURRENT_VERSION=$(docker exec n8n n8n --version 2>&1); then
+    log_warning "Не удалось получить текущую версию n8n (контейнер может быть остановлен)"
+    CURRENT_VERSION="unknown"
+else
+    CURRENT_VERSION=$(echo "$CURRENT_VERSION" | tr -d '\n\r')
+fi
 log_info "Текущая версия: $CURRENT_VERSION"
 
 # Получение последней версии
 log_info "Проверка последней версии на GitHub..."
-LATEST_VERSION=$(curl -s https://api.github.com/repos/n8n-io/n8n/releases/latest | \
+if ! command -v curl &>/dev/null; then
+    log_error "curl не установлен. Установите его: apt-get install curl"
+    exit 1
+fi
+
+LATEST_VERSION=$(curl -s --max-time 10 https://api.github.com/repos/n8n-io/n8n/releases/latest 2>&1 | \
     grep '"tag_name"' | \
     sed -E 's/.*"n8n@([^"]+)".*/\1/' 2>/dev/null || echo "unknown")
 
 if [ "$LATEST_VERSION" = "unknown" ]; then
+    log_warning "Не удалось получить версию с GitHub, пробуем npm registry..."
     # Альтернативный способ получения версии
-    LATEST_VERSION=$(curl -s https://registry.npmjs.org/n8n/latest | \
+    LATEST_VERSION=$(curl -s --max-time 10 https://registry.npmjs.org/n8n/latest 2>&1 | \
         grep -o '"version":"[^"]*"' | \
         cut -d'"' -f4 2>/dev/null || echo "unknown")
+fi
+
+if [ "$LATEST_VERSION" = "unknown" ]; then
+    log_error "Не удалось определить последнюю версию n8n. Проверьте подключение к интернету."
+    send_telegram "❌ Ошибка обновления: не удалось определить последнюю версию"
+    exit 1
 fi
 
 log_info "Последняя версия: $LATEST_VERSION"
@@ -109,7 +141,23 @@ fi
 # ============================================================
 
 log_info "Остановка n8n..."
-docker compose stop n8n || docker-compose stop n8n
+STOP_OUTPUT=$(docker compose stop n8n 2>&1 || docker-compose stop n8n 2>&1)
+if [ $? -ne 0 ]; then
+    log_error "Не удалось остановить n8n: $STOP_OUTPUT"
+    send_telegram "❌ Ошибка остановки n8n перед обновлением"
+    exit 1
+fi
+log_success "n8n остановлен"
+
+# Проверка что контейнер действительно остановлен
+sleep 2
+if docker ps --format '{{.Names}}' | grep -q "^n8n$"; then
+    log_warning "Контейнер n8n всё ещё работает, принудительно останавливаем..."
+    docker stop n8n 2>&1 || {
+        log_error "Не удалось остановить контейнер n8n"
+        exit 1
+    }
+fi
 
 # ============================================================
 # Пересборка образа
@@ -118,45 +166,89 @@ docker compose stop n8n || docker-compose stop n8n
 log_info "Пересборка Docker образа n8n..."
 log_info "Это может занять несколько минут..."
 
-if docker compose build --no-cache n8n; then
-    log_success "Образ пересобран"
-elif docker-compose build --no-cache n8n; then
-    log_success "Образ пересобран (docker-compose)"
-else
-    log_error "Ошибка пересборки образа"
-    send_telegram "❌ Ошибка пересборки образа n8n"
+BUILD_OUTPUT=$(docker compose build --no-cache n8n 2>&1)
+BUILD_EXIT=$?
+
+if [ $BUILD_EXIT -ne 0 ]; then
+    # Пробуем с docker-compose
+    BUILD_OUTPUT=$(docker-compose build --no-cache n8n 2>&1)
+    BUILD_EXIT=$?
+fi
+
+if [ $BUILD_EXIT -ne 0 ]; then
+    log_error "Ошибка пересборки образа:"
+    echo "$BUILD_OUTPUT" | tail -20
+    send_telegram "❌ Ошибка пересборки образа n8n. Проверьте логи."
     exit 1
 fi
+log_success "Образ пересобран"
 
 # ============================================================
 # Запуск n8n
 # ============================================================
 
 log_info "Запуск n8n..."
-if docker compose up -d n8n; then
-    log_success "n8n запущен"
-elif docker-compose up -d n8n; then
-    log_success "n8n запущен (docker-compose)"
-else
-    log_error "Ошибка запуска n8n"
+START_OUTPUT=$(docker compose up -d n8n 2>&1)
+START_EXIT=$?
+
+if [ $START_EXIT -ne 0 ]; then
+    # Пробуем с docker-compose
+    START_OUTPUT=$(docker-compose up -d n8n 2>&1)
+    START_EXIT=$?
+fi
+
+if [ $START_EXIT -ne 0 ]; then
+    log_error "Ошибка запуска n8n:"
+    echo "$START_OUTPUT"
     send_telegram "❌ Ошибка запуска n8n после обновления"
     exit 1
 fi
+log_success "n8n запущен"
 
 # ============================================================
 # Ожидание запуска
 # ============================================================
 
-log_info "Ожидание запуска n8n..."
+log_info "Ожидание запуска n8n (до 60 секунд)..."
+n8n_healthy=false
 for i in {1..30}; do
     sleep 2
     if docker exec n8n wget --spider -q http://localhost:5678/healthz 2>/dev/null; then
         log_success "n8n отвечает на healthcheck"
+        n8n_healthy=true
         break
     fi
+
+    # Проверяем что контейнер всё ещё работает
+    if ! docker ps --format '{{.Names}}' | grep -q "^n8n$"; then
+        log_error "Контейнер n8n остановился во время запуска"
+        log_error "Логи контейнера:"
+        docker logs n8n --tail 50
+        send_telegram "❌ Контейнер n8n остановился во время обновления"
+        exit 1
+    fi
+
     echo -n "."
 done
 echo ""
+
+if [ "$n8n_healthy" == "false" ]; then
+    log_warning "n8n не ответил на healthcheck за 60 секунд"
+    log_warning "Проверяем статус контейнера..."
+
+    CONTAINER_STATUS=$(docker inspect n8n --format='{{.State.Status}}' 2>/dev/null || echo "unknown")
+    log_info "Статус контейнера: $CONTAINER_STATUS"
+
+    if [ "$CONTAINER_STATUS" == "running" ]; then
+        log_warning "Контейнер работает, но healthcheck не отвечает"
+        log_warning "Возможно, n8n всё ещё запускается. Подождите ещё минуту."
+    else
+        log_error "Контейнер не работает. Последние логи:"
+        docker logs n8n --tail 50
+        send_telegram "❌ Ошибка: n8n не запустился после обновления"
+        exit 1
+    fi
+fi
 
 # ============================================================
 # Проверка новой версии
