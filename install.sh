@@ -49,7 +49,7 @@ ENCRYPTION_KEY=$(openssl rand -hex 32)
 log_info "Сгенерирован ключ шифрования"
 
 # Директория установки
-INSTALL_DIR="/opt/n8n"
+INSTALL_DIR="/opt/main"
 REPO_URL="https://github.com/kalibrrbilak/n8n-install.git"
 
 log_info "Обновление системы..."
