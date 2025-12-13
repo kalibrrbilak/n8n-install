@@ -21,7 +21,7 @@
 ## Быстрая установка
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/YOUR_USERNAME/n8n-install/main/install.sh)
+bash <(curl -s https://raw.githubusercontent.com/kalibrrbilak/n8n-install/main/install.sh)
 ```
 
 ## Что устанавливается
