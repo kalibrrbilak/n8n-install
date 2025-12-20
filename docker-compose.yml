@@ -1,4 +1,13 @@
+# ============================================================
+# n8n Docker Compose v2.0
+# PostgreSQL 16 + Redis 7 + Traefik SSL + n8n 2.0+
+# Supports: Proxy, Gemini AI, Execute Command
+# ============================================================
+
 services:
+  # ==========================================================
+  # n8n - Main Application
+  # ==========================================================
   n8n:
     build:
       context: .
@@ -6,27 +15,61 @@ services:
     container_name: n8n
     restart: unless-stopped
     environment:
+      # Core Settings
       - N8N_HOST=${N8N_HOST}
       - N8N_PORT=${N8N_PORT}
       - N8N_PROTOCOL=${N8N_PROTOCOL}
       - WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_EDITOR_BASE_URL=${N8N_EDITOR_BASE_URL}
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # Database
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=n8n-postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
       - DB_POSTGRESDB_USER=${POSTGRES_USER}
       - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+
+      # Queue Mode with Redis
       - EXECUTIONS_MODE=${EXECUTIONS_MODE}
       - QUEUE_BULL_REDIS_HOST=${QUEUE_BULL_REDIS_HOST}
       - QUEUE_BULL_REDIS_PORT=${QUEUE_BULL_REDIS_PORT}
+
+      # Execute Command Support - IMPORTANT for n8n 2.0+
+      - N8N_ALLOW_EXEC=${N8N_ALLOW_EXEC:-true}
+      - N8N_COMMUNITY_PACKAGES_ENABLED=${N8N_COMMUNITY_PACKAGES_ENABLED:-true}
+
+      # Execution Data Persistence
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=${EXECUTIONS_DATA_SAVE_ON_ERROR:-all}
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=${EXECUTIONS_DATA_SAVE_ON_SUCCESS:-all}
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=${EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS:-true}
+
+      # Timezone
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
       - TZ=${TZ}
-      - N8N_METRICS=${N8N_METRICS}
+
+      # Logging & Metrics
       - N8N_LOG_LEVEL=${N8N_LOG_LEVEL}
+      - N8N_LOG_OUTPUT=${N8N_LOG_OUTPUT:-console}
+      - N8N_METRICS=${N8N_METRICS}
       - N8N_DIAGNOSTICS_ENABLED=${N8N_DIAGNOSTICS_ENABLED}
+      - N8N_HIRING_BANNER_ENABLED=${N8N_HIRING_BANNER_ENABLED:-false}
+
+      # Proxy (if configured)
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - GLOBAL_HTTP_PROXY=${GLOBAL_HTTP_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
+
+      # Gemini AI (if configured)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_CLI_PATH=${GEMINI_CLI_PATH:-}
+
     volumes:
       - n8n_data:/home/node/.n8n
+      - /opt/n8n_custom:/opt/n8n_custom:rw
+      - /opt/gemini:/opt/gemini:ro
       - ./logs:/logs
     depends_on:
       n8n-postgres:
@@ -35,23 +78,35 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
+      # HTTPS Router
       - "traefik.http.routers.n8n.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+      # HTTP Router (redirect to HTTPS)
       - "traefik.http.routers.n8n-http.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.n8n-http.entrypoints=web"
       - "traefik.http.routers.n8n-http.middlewares=redirect-to-https"
       - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
     networks:
       - n8n-network
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
 
+  # ==========================================================
+  # PostgreSQL 16 - Database
+  # ==========================================================
   n8n-postgres:
     image: postgres:16-alpine
     container_name: n8n-postgres
@@ -60,6 +115,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+      - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -68,14 +124,28 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
 
+  # ==========================================================
+  # Redis 7 - Queue & Cache
+  # ==========================================================
   n8n-redis:
     image: redis:7-alpine
     container_name: n8n-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
     networks:
@@ -84,23 +154,36 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 64M
 
+  # ==========================================================
+  # Traefik v3 - Reverse Proxy & SSL
+  # ==========================================================
   n8n-traefik:
     image: traefik:v3.2
     container_name: n8n-traefik
     restart: unless-stopped
     command:
       - "--api.dashboard=false"
+      - "--api.insecure=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=n8n-network"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http.tls=true"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
       - "--certificatesresolvers.letsencrypt.acme.email=${SSL_EMAIL}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--log.level=WARN"
     ports:
       - "80:80"
       - "443:443"
@@ -114,7 +197,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
+  # ==========================================================
+  # Telegram Bot - Management (Optional)
+  # ==========================================================
   n8n-bot:
     build:
       context: ./bot
@@ -133,13 +220,28 @@ services:
       - n8n-network
     depends_on:
       - n8n
+    profiles:
+      - bot
 
+# ==========================================================
+# Networks
+# ==========================================================
 networks:
   n8n-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
+# ==========================================================
+# Volumes
+# ==========================================================
 volumes:
   n8n_data:
+    driver: local
   postgres_data:
+    driver: local
   redis_data:
+    driver: local
   traefik_certs:
+    driver: local
