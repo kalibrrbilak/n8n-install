@@ -11,7 +11,7 @@ const path = require('path');
 // Конфигурация
 const BOT_TOKEN = process.env.TG_BOT_TOKEN;
 const AUTHORIZED_USER = process.env.TG_USER_ID;
-const N8N_DIR = process.env.N8N_DIR || '/opt/n8n';
+const N8N_DIR = process.env.N8N_DIR || '/opt/main';
 
 // Проверка обязательных переменных
 if (!BOT_TOKEN || !AUTHORIZED_USER) {

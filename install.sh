@@ -120,7 +120,7 @@ fi
 log_success "Все пароли и ключи сгенерированы"
 
 # Директория установки
-INSTALL_DIR="/opt/n8n"
+INSTALL_DIR="/opt/main"
 REPO_URL="https://github.com/kalibrrbilak/n8n-install.git"
 
 log_info "Обновление системы..."
