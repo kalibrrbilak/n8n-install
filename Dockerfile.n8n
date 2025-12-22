@@ -2,6 +2,22 @@ FROM n8nio/n8n:latest
 
 USER root
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🚀 n8n SUPER BUILD - AI/ML + Автоматизация
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 👨‍💻 Автор: WebSansay
+# 📱 Telegram: https://t.me/websansay
+# 📢 Канал с автоматизациями: https://t.me/+p3VDHRpArOc5YzM6
+# 💰 Поддержать проект: https://boosty.to/websansay
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RUN echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo "🚀 n8n SUPER BUILD - Начинаем сборку!" && \
+    echo "👨‍💻 by WebSansay | TG: https://t.me/websansay" && \
+    echo "📢 Канал: https://t.me/+p3VDHRpArOc5YzM6" && \
+    echo "💰 Донаты: https://boosty.to/websansay" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
 # Alpine репозитории + апдейт
 RUN set -eux; \
   printf '%s\n' \
@@ -50,6 +66,14 @@ RUN set -eux; \
 RUN npm config set fund false && npm config set audit false
 
 # npm-глобалки (оставляем все как у тебя было)
+RUN echo "" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo "📦 Устанавливаю 30+ npm пакетов для AI, ботов и автоматизации..." && \
+    echo "⏱️  Это займёт 5-10 минут - идеальное время посетить наш канал! 😉" && \
+    echo "📢 https://t.me/+p3VDHRpArOc5YzM6 - готовые сценарии и автоматизации!" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo ""
+
 RUN for pkg in \
     axios \
     node-fetch \
@@ -110,3 +134,23 @@ WORKDIR /home/node
 
 # КРИТИЧНО: НЕ переопределяем CMD/ENTRYPOINT - используем из базового образа n8nio/n8n
 # Базовый образ имеет правильный entrypoint для запуска n8n
+
+RUN echo "" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo "✅ n8n SUPER BUILD завершён успешно!" && \
+    echo "" && \
+    echo "🎉 Готовы к работе:" && \
+    echo "   • OpenAI, TensorFlow, LangChain (AI/ML)" && \
+    echo "   • Telegram, Discord, VK, WhatsApp боты" && \
+    echo "   • FFmpeg, ImageMagick, Tesseract OCR" && \
+    echo "   • Chromium + Puppeteer для автоматизации браузера" && \
+    echo "   • И ещё 20+ библиотек!" && \
+    echo "" && \
+    echo "👨‍💻 Автор: WebSansay" && \
+    echo "📱 Вопросы и помощь: https://t.me/websansay" && \
+    echo "📢 Канал с готовыми сценариями: https://t.me/+p3VDHRpArOc5YzM6" && \
+    echo "💰 Поддержать проект: https://boosty.to/websansay" && \
+    echo "" && \
+    echo "Понравилась сборка? Поддержи донатом! 🙏" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo ""
