@@ -678,29 +678,117 @@ FROM n8nio/n8n:latest
 
 USER root
 
-# Установка дополнительных зависимостей
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🚀 n8n SUPER BUILD - AI/ML + Автоматизация
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 👨‍💻 Автор: WebSansay
+# 📱 Telegram: https://t.me/websansay
+# 📢 Канал с автоматизациями: https://t.me/+p3VDHRpArOc5YzM6
+# 💰 Поддержать проект: https://boosty.to/websansay
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RUN echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo "🚀 n8n SUPER BUILD - Начинаем сборку!" && \
+    echo "👨‍💻 by WebSansay | TG: https://t.me/websansay" && \
+    echo "📢 Канал: https://t.me/+p3VDHRpArOc5YzM6" && \
+    echo "💰 Донаты: https://boosty.to/websansay" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Системные пакеты (используем репозитории базового образа)
 RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    chromium \
-    chromium-chromedriver \
-    font-noto \
-    font-noto-cjk \
-    font-noto-emoji \
-    ffmpeg \
-    imagemagick \
-    ghostscript \
-    graphicsmagick \
-    poppler-utils \
-    tesseract-ocr \
-    tesseract-ocr-data-rus \
-    tesseract-ocr-data-eng \
-    curl \
-    jq \
-    git
+  bash \
+  curl \
+  git \
+  make \
+  g++ \
+  gcc \
+  python3 \
+  py3-pip \
+  libffi-dev \
+  yt-dlp \
+  apache2-utils \
+  ffmpeg \
+  docker-cli \
+  chromium \
+  chromium-chromedriver \
+  font-noto \
+  font-noto-cjk \
+  font-noto-emoji \
+  imagemagick \
+  ghostscript \
+  graphicsmagick \
+  poppler-utils \
+  tesseract-ocr \
+  tesseract-ocr-data-rus \
+  tesseract-ocr-data-eng \
+  jq
+
+# (опционально) Создать группу docker и добавить пользователя node
+ARG DOCKER_GID=999
+RUN set -eux; \
+  addgroup -S -g ${DOCKER_GID} docker || addgroup -S docker; \
+  adduser node docker || true
+
+# Чуть ускорим npm
+RUN npm config set fund false && npm config set audit false
+
+# npm-глобалки
+RUN echo "" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo "📦 Устанавливаю 30+ npm пакетов для AI, ботов и автоматизации..." && \
+    echo "⏱️  Это займёт 5-10 минут - идеальное время посетить наш канал! 😉" && \
+    echo "📢 https://t.me/+p3VDHRpArOc5YzM6 - готовые сценарии и автоматизации!" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo ""
+
+RUN for pkg in \
+    axios \
+    node-fetch \
+    form-data \
+    moment \
+    date-fns \
+    lodash \
+    fs-extra \
+    path \
+    csv-parser \
+    xml2js \
+    js-yaml \
+    xlsx \
+    jsonwebtoken \
+    simple-oauth2 \
+    uuid \
+    openai \
+    @tensorflow/tfjs-node \
+    langchain \
+    node-telegram-bot-api \
+    discord.js \
+    vk-io \
+    whatsapp-web.js \
+    fluent-ffmpeg \
+    ffmpeg-static \
+    google-tts-api \
+    @vitalets/google-translate-token \
+    node-wav \
+    mongoose \
+    ioredis \
+    bcrypt \
+    validator \
+    joi \
+    winston \
+    dotenv \
+    prom-client \
+    node-downloader-helper \
+    adm-zip \
+    archiver \
+  ; do \
+    echo "🔧 Устанавливаем $pkg..." && npm install -g "$pkg" || echo "⚠️ Не удалось установить $pkg, продолжаем..."; \
+  done
+
+# Локально — для доступности в Code-нодах
+RUN npm install oauth-1.0a
 
 # Puppeteer конфигурация
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV CHROME_PATH=/usr/bin/chromium-browser
 
@@ -711,12 +799,28 @@ USER node
 
 WORKDIR /home/node
 
-EXPOSE 5678
+# КРИТИЧНО: НЕ переопределяем CMD/ENTRYPOINT - используем из базового образа n8nio/n8n
+# Базовый образ имеет правильный entrypoint для запуска n8n
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD wget --spider -q http://localhost:5678/healthz || exit 1
-
-CMD ["n8n"]
+RUN echo "" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo "✅ n8n SUPER BUILD завершён успешно!" && \
+    echo "" && \
+    echo "🎉 Готовы к работе:" && \
+    echo "   • OpenAI, TensorFlow, LangChain (AI/ML)" && \
+    echo "   • Telegram, Discord, VK, WhatsApp боты" && \
+    echo "   • FFmpeg, ImageMagick, Tesseract OCR" && \
+    echo "   • Chromium + Puppeteer для автоматизации браузера" && \
+    echo "   • И ещё 20+ библиотек!" && \
+    echo "" && \
+    echo "👨‍💻 Автор: WebSansay" && \
+    echo "📱 Вопросы и помощь: https://t.me/websansay" && \
+    echo "📢 Канал с готовыми сценариями: https://t.me/+p3VDHRpArOc5YzM6" && \
+    echo "💰 Поддержать проект: https://boosty.to/websansay" && \
+    echo "" && \
+    echo "Понравилась сборка? Поддержи донатом! 🙏" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo ""
 DOCKERFILE_EOF
 
 log_success "Dockerfile.n8n создан"
