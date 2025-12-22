@@ -1,4 +1,9 @@
+version: '3.8'
+
 services:
+  # ============================================================
+  # n8n - Главное приложение
+  # ============================================================
   n8n:
     build:
       context: .
@@ -6,45 +11,84 @@ services:
     container_name: n8n
     restart: unless-stopped
     environment:
-      - N8N_HOST=${N8N_HOST}
-      - N8N_PORT=${N8N_PORT}
-      - N8N_PROTOCOL=${N8N_PROTOCOL}
+      # Домен и протокол
+      - N8N_HOST=${DOMAIN}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
       - WEBHOOK_URL=${WEBHOOK_URL}
+
+      # Шифрование
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # База данных PostgreSQL
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=n8n-postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
       - DB_POSTGRESDB_USER=${POSTGRES_USER}
       - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+
+      # Queue mode с Redis
       - EXECUTIONS_MODE=${EXECUTIONS_MODE}
       - QUEUE_BULL_REDIS_HOST=${QUEUE_BULL_REDIS_HOST}
       - QUEUE_BULL_REDIS_PORT=${QUEUE_BULL_REDIS_PORT}
+      - QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}
+
+      # Binary data
+      - N8N_BINARY_DATA_MODE=${N8N_BINARY_DATA_MODE}
+      - N8N_DEFAULT_BINARY_DATA_MODE=${N8N_DEFAULT_BINARY_DATA_MODE}
+
+      # Proxy settings (для Traefik)
+      - N8N_EXPRESS_TRUST_PROXY=${N8N_EXPRESS_TRUST_PROXY}
+      - N8N_TRUSTED_PROXIES=${N8N_TRUSTED_PROXIES}
+      - N8N_PROXY_HOPS=${N8N_PROXY_HOPS}
+
+      # Basic Auth (опционально)
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-}
+
+      # Внешний прокси (опционально)
+      - HTTP_PROXY=${PROXY_URL:-}
+      - HTTPS_PROXY=${PROXY_URL:-}
+      - NO_PROXY=${NO_PROXY}
+
+      # Timezone
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
       - TZ=${TZ}
+
+      # Дополнительные настройки
       - N8N_METRICS=${N8N_METRICS}
       - N8N_LOG_LEVEL=${N8N_LOG_LEVEL}
       - N8N_DIAGNOSTICS_ENABLED=${N8N_DIAGNOSTICS_ENABLED}
+      - N8N_PERSONALIZATION_ENABLED=${N8N_PERSONALIZATION_ENABLED}
+
     volumes:
       - n8n_data:/home/node/.n8n
       - ./logs:/logs
+
     depends_on:
       n8n-postgres:
         condition: service_healthy
       n8n-redis:
         condition: service_healthy
+
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.n8n.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+
+      # HTTP -> HTTPS redirect
       - "traefik.http.routers.n8n-http.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.n8n-http.entrypoints=web"
       - "traefik.http.routers.n8n-http.middlewares=redirect-to-https"
       - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
     networks:
       - n8n-network
+
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
       interval: 30s
@@ -52,6 +96,9 @@ services:
       retries: 3
       start_period: 60s
 
+  # ============================================================
+  # PostgreSQL - База данных
+  # ============================================================
   n8n-postgres:
     image: postgres:16-alpine
     container_name: n8n-postgres
@@ -60,6 +107,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=${TZ}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -71,22 +119,83 @@ services:
       retries: 5
       start_period: 30s
 
+  # ============================================================
+  # pgAdmin - UI для PostgreSQL
+  # ============================================================
+  n8n-pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: n8n-pgadmin
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+      - TZ=${TZ}
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./configs/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      - n8n-postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pgadmin.rule=Host(`${PGADMIN_DOMAIN}`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+    networks:
+      - n8n-network
+
+  # ============================================================
+  # Redis - Кэш и очередь
+  # ============================================================
   n8n-redis:
     image: redis:7-alpine
     container_name: n8n-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
+    environment:
+      - TZ=${TZ}
     volumes:
       - redis_data:/data
     networks:
       - n8n-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
 
+  # ============================================================
+  # Redis Commander - UI для Redis
+  # ============================================================
+  n8n-redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: n8n-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=n8n:n8n-redis:6379:0:${REDIS_PASSWORD}
+      - HTTP_USER=${REDIS_UI_USER}
+      - HTTP_PASSWORD=${REDIS_UI_PASSWORD}
+      - TZ=${TZ}
+    depends_on:
+      - n8n-redis
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.redis.rule=Host(`${REDIS_DOMAIN}`)"
+      - "traefik.http.routers.redis.entrypoints=websecure"
+      - "traefik.http.routers.redis.tls.certresolver=letsencrypt"
+      - "traefik.http.services.redis.loadbalancer.server.port=8081"
+    networks:
+      - n8n-network
+
+  # ============================================================
+  # Traefik - Reverse Proxy + SSL
+  # ============================================================
   n8n-traefik:
     image: traefik:v3.2
     container_name: n8n-traefik
@@ -99,8 +208,11 @@ services:
       - "--entrypoints.websecure.address=:443"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.letsencrypt.acme.email=${SSL_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.email=${EMAIL}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--log.level=INFO"
+    environment:
+      - TZ=${TZ}
     ports:
       - "80:80"
       - "443:443"
@@ -115,6 +227,9 @@ services:
       timeout: 10s
       retries: 3
 
+  # ============================================================
+  # Telegram Bot - Администрирование
+  # ============================================================
   n8n-bot:
     build:
       context: ./bot
@@ -125,6 +240,14 @@ services:
       - TG_BOT_TOKEN=${TG_BOT_TOKEN}
       - TG_USER_ID=${TG_USER_ID}
       - N8N_DIR=/opt/n8n
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - DOMAIN=${DOMAIN}
+      - PGADMIN_DOMAIN=${PGADMIN_DOMAIN}
+      - REDIS_DOMAIN=${REDIS_DOMAIN}
+      - TZ=${TZ}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /opt/n8n:/opt/n8n:ro
@@ -140,6 +263,12 @@ networks:
 
 volumes:
   n8n_data:
+    driver: local
   postgres_data:
+    driver: local
   redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
   traefik_certs:
+    driver: local

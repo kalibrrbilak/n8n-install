@@ -108,7 +108,7 @@ bot.onText(/\/(start|help)/, (msg) => {
     if (!isAuthorized(msg)) return;
 
     const helpText = `
-*n8n Management Bot v2.0*
+*n8n Management Bot v3.0*
 
 Доступные команды:
 
@@ -118,9 +118,10 @@ bot.onText(/\/(start|help)/, (msg) => {
 /backup - Создать резервную копию
 /restart - Перезапустить n8n
 /disk - Информация о дисковом пространстве
+/urls - Список всех URL сервисов (n8n, pgAdmin, Redis)
 /help - Показать эту справку
 
-_Бот управляет n8n через Docker_
+_Бот управляет n8n + PostgreSQL + Redis через Docker_
     `;
     bot.sendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' });
 });
@@ -442,6 +443,38 @@ ${dockerUsage.trim()}
     } catch (error) {
         await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
     }
+});
+
+/**
+ * /urls - Список всех URL сервисов
+ */
+bot.onText(/\/urls/, async (msg) => {
+    if (!isAuthorized(msg)) return;
+
+    const chatId = msg.chat.id;
+
+    const DOMAIN = process.env.DOMAIN || 'не настроен';
+    const PGADMIN_DOMAIN = process.env.PGADMIN_DOMAIN || 'не настроен';
+    const REDIS_DOMAIN = process.env.REDIS_DOMAIN || 'не настроен';
+
+    const urlsText = `
+🌐 *Адреса всех сервисов*
+
+*n8n (главное приложение):*
+https://${DOMAIN}
+
+*pgAdmin (UI для PostgreSQL):*
+https://${PGADMIN_DOMAIN}
+
+*Redis Commander (UI для Redis):*
+https://${REDIS_DOMAIN}
+
+📝 *Примечание:*
+- Все сервисы доступны через HTTPS
+- PostgreSQL и Redis напрямую недоступны (только через UI)
+    `;
+
+    await bot.sendMessage(chatId, urlsText, { parse_mode: 'Markdown' });
 });
 
 // ============================================================

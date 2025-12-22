@@ -38,15 +38,27 @@ echo ""
 
 # Ввод данных
 read -p "Домен для n8n (например, n8n.example.com): " DOMAIN
-read -p "Email для SSL сертификата: " EMAIL
+read -p "Домен для pgAdmin (например, pgadmin.example.com): " PGADMIN_DOMAIN
+read -p "Домен для Redis Commander (например, redis.example.com): " REDIS_DOMAIN
+read -p "Email для SSL сертификата и pgAdmin: " EMAIL
 read -sp "Пароль PostgreSQL: " DB_PASSWORD
 echo ""
-read -p "Telegram Bot Token: " TG_BOT_TOKEN
-read -p "Telegram User ID (ваш ID): " TG_USER_ID
+read -p "Telegram Bot Token (или Enter для пропуска): " TG_BOT_TOKEN
+read -p "Telegram User ID (или Enter для пропуска): " TG_USER_ID
 
 # Валидация введённых данных
 if [[ -z "$DOMAIN" ]]; then
-    log_error "Домен не может быть пустым"
+    log_error "Домен для n8n не может быть пустым"
+    exit 1
+fi
+
+if [[ -z "$PGADMIN_DOMAIN" ]]; then
+    log_error "Домен для pgAdmin не может быть пустым"
+    exit 1
+fi
+
+if [[ -z "$REDIS_DOMAIN" ]]; then
+    log_error "Домен для Redis Commander не может быть пустым"
     exit 1
 fi
 
@@ -74,8 +86,8 @@ if ! echo "$EMAIL" | grep -qE '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     exit 1
 fi
 
-# Генерация ключа шифрования
-log_info "Генерация ключа шифрования..."
+# Генерация паролей и ключей
+log_info "Генерация паролей и ключей..."
 if ! command -v openssl &>/dev/null; then
     log_error "openssl не установлен. Установите его: apt-get install openssl"
     exit 1
@@ -86,7 +98,26 @@ if [[ $? -ne 0 ]] || [[ -z "$ENCRYPTION_KEY" ]]; then
     log_error "Не удалось сгенерировать ключ шифрования: $ENCRYPTION_KEY"
     exit 1
 fi
-log_success "Ключ шифрования сгенерирован"
+
+REDIS_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25 2>&1)
+if [[ $? -ne 0 ]] || [[ -z "$REDIS_PASSWORD" ]]; then
+    log_error "Не удалось сгенерировать пароль Redis: $REDIS_PASSWORD"
+    exit 1
+fi
+
+PGADMIN_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25 2>&1)
+if [[ $? -ne 0 ]] || [[ -z "$PGADMIN_PASSWORD" ]]; then
+    log_error "Не удалось сгенерировать пароль pgAdmin: $PGADMIN_PASSWORD"
+    exit 1
+fi
+
+REDIS_UI_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25 2>&1)
+if [[ $? -ne 0 ]] || [[ -z "$REDIS_UI_PASSWORD" ]]; then
+    log_error "Не удалось сгенерировать пароль Redis UI: $REDIS_UI_PASSWORD"
+    exit 1
+fi
+
+log_success "Все пароли и ключи сгенерированы"
 
 # Директория установки
 INSTALL_DIR="/opt/n8n"
@@ -211,46 +242,120 @@ cd "$INSTALL_DIR"
 # ============================================================
 log_info "Создание конфигурации..."
 cat > "$INSTALL_DIR/.env" << EOF
-# n8n Configuration
-DOMAIN=${DOMAIN}
-N8N_HOST=${DOMAIN}
-N8N_PORT=5678
-N8N_PROTOCOL=https
-WEBHOOK_URL=https://${DOMAIN}/
-N8N_ENCRYPTION_KEY=${ENCRYPTION_KEY}
+# ============================================================
+# n8n v3+ Полная конфигурация
+# Создано автоматически при установке $(date '+%Y-%m-%d %H:%M:%S')
+# ============================================================
 
-# Database
+# ============================================================
+# ДОМЕНЫ (обязательно настроить DNS A-записи!)
+# ============================================================
+DOMAIN=${DOMAIN}
+PGADMIN_DOMAIN=${PGADMIN_DOMAIN}
+REDIS_DOMAIN=${REDIS_DOMAIN}
+
+# ============================================================
+# SSL СЕРТИФИКАТЫ
+# ============================================================
+EMAIL=${EMAIL}
+
+# ============================================================
+# POSTGRESQL
+# ============================================================
 POSTGRES_USER=n8n
 POSTGRES_PASSWORD=${DB_PASSWORD}
 POSTGRES_DB=n8n
-POSTGRES_NON_ROOT_USER=n8n
-POSTGRES_NON_ROOT_PASSWORD=${DB_PASSWORD}
 
-# Redis
-REDIS_HOST=n8n-redis
-REDIS_PORT=6379
+# ============================================================
+# PGADMIN (UI для PostgreSQL)
+# Доступ: https://${PGADMIN_DOMAIN}
+# ============================================================
+PGADMIN_EMAIL=${EMAIL}
+PGADMIN_PASSWORD=${PGADMIN_PASSWORD}
 
-# Queue mode для производительности
-EXECUTIONS_MODE=queue
-QUEUE_BULL_REDIS_HOST=n8n-redis
-QUEUE_BULL_REDIS_PORT=6379
+# ============================================================
+# REDIS
+# ============================================================
+REDIS_PASSWORD=${REDIS_PASSWORD}
 
-# SSL
-SSL_EMAIL=${EMAIL}
+# Redis Commander UI (HTTP Basic Auth)
+# Доступ: https://${REDIS_DOMAIN}
+REDIS_UI_USER=admin
+REDIS_UI_PASSWORD=${REDIS_UI_PASSWORD}
 
-# Telegram Bot
+# ============================================================
+# N8N - ОСНОВНЫЕ НАСТРОЙКИ
+# ============================================================
+N8N_ENCRYPTION_KEY=${ENCRYPTION_KEY}
+WEBHOOK_URL=https://${DOMAIN}/
+
+# ============================================================
+# N8N - BINARY DATA MODE
+# Где хранить файлы: filesystem (на диске) или database (в БД)
+# Рекомендуется: filesystem для лучшей производительности
+# ============================================================
+N8N_BINARY_DATA_MODE=filesystem
+N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+
+# ============================================================
+# N8N - PROXY SETTINGS (для Traefik)
+# ВАЖНО: для корректной работы с reverse proxy
+# ============================================================
+N8N_EXPRESS_TRUST_PROXY=true
+N8N_TRUSTED_PROXIES=*
+N8N_PROXY_HOPS=1
+
+# ============================================================
+# N8N - BASIC AUTH (дополнительная защита)
+# Если включить, будет запрашивать логин/пароль ДО входа в n8n
+# ============================================================
+N8N_BASIC_AUTH_ACTIVE=false
+# N8N_BASIC_AUTH_USER=admin
+# N8N_BASIC_AUTH_PASSWORD=<пароль>
+
+# ============================================================
+# ВНЕШНИЙ PROXY (для n8n запросов наружу)
+# Если n8n должен ходить в интернет через прокси
+# Формат: http://user:pass@proxy-server:port
+# ============================================================
+PROXY_URL=
+
+# Исключения для прокси (внутренние адреса Docker)
+# ВАЖНО: эти адреса НЕ должны ходить через прокси
+NO_PROXY=localhost,127.0.0.1,::1,.local,postgres,redis,pgadmin,traefik,n8n,n8n-postgres,n8n-redis,n8n-pgadmin,n8n-redis-commander,n8n-traefik
+
+# ============================================================
+# TELEGRAM BOT
+# ============================================================
 TG_BOT_TOKEN=${TG_BOT_TOKEN}
 TG_USER_ID=${TG_USER_ID}
 
-# Timezone
-GENERIC_TIMEZONE=Europe/Moscow
-TZ=Europe/Moscow
+# ============================================================
+# РЕЗЕРВНОЕ КОПИРОВАНИЕ
+# ============================================================
+BACKUP_RETENTION_DAYS=7
+BACKUP_SCHEDULE="0 2 * * *"
 
-# n8n settings
+# ============================================================
+# TIMEZONE (Екатеринбург)
+# ============================================================
+GENERIC_TIMEZONE=Asia/Yekaterinburg
+TZ=Asia/Yekaterinburg
+
+# ============================================================
+# N8N - ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ
+# ============================================================
 N8N_METRICS=true
 N8N_LOG_LEVEL=info
 N8N_DIAGNOSTICS_ENABLED=false
 N8N_PERSONALIZATION_ENABLED=false
+
+# ============================================================
+# QUEUE MODE (для высокой производительности)
+# ============================================================
+EXECUTIONS_MODE=queue
+QUEUE_BULL_REDIS_HOST=n8n-redis
+QUEUE_BULL_REDIS_PORT=6379
 EOF
 
 chmod 600 "$INSTALL_DIR/.env"
@@ -261,7 +366,12 @@ log_success "Конфигурация создана"
 # ============================================================
 log_info "Создание docker-compose.yml..."
 cat > "$INSTALL_DIR/docker-compose.yml" << 'COMPOSE_EOF'
+version: '3.8'
+
 services:
+  # ============================================================
+  # n8n - Главное приложение
+  # ============================================================
   n8n:
     build:
       context: .
@@ -269,45 +379,84 @@ services:
     container_name: n8n
     restart: unless-stopped
     environment:
-      - N8N_HOST=${N8N_HOST}
-      - N8N_PORT=${N8N_PORT}
-      - N8N_PROTOCOL=${N8N_PROTOCOL}
+      # Домен и протокол
+      - N8N_HOST=${DOMAIN}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
       - WEBHOOK_URL=${WEBHOOK_URL}
+
+      # Шифрование
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # База данных PostgreSQL
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=n8n-postgres
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
       - DB_POSTGRESDB_USER=${POSTGRES_USER}
       - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+
+      # Queue mode с Redis
       - EXECUTIONS_MODE=${EXECUTIONS_MODE}
       - QUEUE_BULL_REDIS_HOST=${QUEUE_BULL_REDIS_HOST}
       - QUEUE_BULL_REDIS_PORT=${QUEUE_BULL_REDIS_PORT}
+      - QUEUE_BULL_REDIS_PASSWORD=${REDIS_PASSWORD}
+
+      # Binary data
+      - N8N_BINARY_DATA_MODE=${N8N_BINARY_DATA_MODE}
+      - N8N_DEFAULT_BINARY_DATA_MODE=${N8N_DEFAULT_BINARY_DATA_MODE}
+
+      # Proxy settings (для Traefik)
+      - N8N_EXPRESS_TRUST_PROXY=${N8N_EXPRESS_TRUST_PROXY}
+      - N8N_TRUSTED_PROXIES=${N8N_TRUSTED_PROXIES}
+      - N8N_PROXY_HOPS=${N8N_PROXY_HOPS}
+
+      # Basic Auth (опционально)
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE}
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-}
+
+      # Внешний прокси (опционально)
+      - HTTP_PROXY=${PROXY_URL:-}
+      - HTTPS_PROXY=${PROXY_URL:-}
+      - NO_PROXY=${NO_PROXY}
+
+      # Timezone
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
       - TZ=${TZ}
+
+      # Дополнительные настройки
       - N8N_METRICS=${N8N_METRICS}
       - N8N_LOG_LEVEL=${N8N_LOG_LEVEL}
       - N8N_DIAGNOSTICS_ENABLED=${N8N_DIAGNOSTICS_ENABLED}
+      - N8N_PERSONALIZATION_ENABLED=${N8N_PERSONALIZATION_ENABLED}
+
     volumes:
       - n8n_data:/home/node/.n8n
       - ./logs:/logs
+
     depends_on:
       n8n-postgres:
         condition: service_healthy
       n8n-redis:
         condition: service_healthy
+
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.n8n.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+
+      # HTTP -> HTTPS redirect
       - "traefik.http.routers.n8n-http.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.n8n-http.entrypoints=web"
       - "traefik.http.routers.n8n-http.middlewares=redirect-to-https"
       - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
     networks:
       - n8n-network
+
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5678/healthz"]
       interval: 30s
@@ -315,6 +464,9 @@ services:
       retries: 3
       start_period: 60s
 
+  # ============================================================
+  # PostgreSQL - База данных
+  # ============================================================
   n8n-postgres:
     image: postgres:16-alpine
     container_name: n8n-postgres
@@ -323,6 +475,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=${TZ}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -334,22 +487,83 @@ services:
       retries: 5
       start_period: 30s
 
+  # ============================================================
+  # pgAdmin - UI для PostgreSQL
+  # ============================================================
+  n8n-pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: n8n-pgadmin
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
+      - PGADMIN_CONFIG_SERVER_MODE=False
+      - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False
+      - TZ=${TZ}
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./configs/pgadmin/servers.json:/pgadmin4/servers.json:ro
+    depends_on:
+      - n8n-postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pgadmin.rule=Host(`${PGADMIN_DOMAIN}`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+    networks:
+      - n8n-network
+
+  # ============================================================
+  # Redis - Кэш и очередь
+  # ============================================================
   n8n-redis:
     image: redis:7-alpine
     container_name: n8n-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
+    environment:
+      - TZ=${TZ}
     volumes:
       - redis_data:/data
     networks:
       - n8n-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
 
+  # ============================================================
+  # Redis Commander - UI для Redis
+  # ============================================================
+  n8n-redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: n8n-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=n8n:n8n-redis:6379:0:${REDIS_PASSWORD}
+      - HTTP_USER=${REDIS_UI_USER}
+      - HTTP_PASSWORD=${REDIS_UI_PASSWORD}
+      - TZ=${TZ}
+    depends_on:
+      - n8n-redis
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.redis.rule=Host(`${REDIS_DOMAIN}`)"
+      - "traefik.http.routers.redis.entrypoints=websecure"
+      - "traefik.http.routers.redis.tls.certresolver=letsencrypt"
+      - "traefik.http.services.redis.loadbalancer.server.port=8081"
+    networks:
+      - n8n-network
+
+  # ============================================================
+  # Traefik - Reverse Proxy + SSL
+  # ============================================================
   n8n-traefik:
     image: traefik:v3.2
     container_name: n8n-traefik
@@ -362,8 +576,11 @@ services:
       - "--entrypoints.websecure.address=:443"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.letsencrypt.acme.email=${SSL_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.email=${EMAIL}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--log.level=INFO"
+    environment:
+      - TZ=${TZ}
     ports:
       - "80:80"
       - "443:443"
@@ -378,6 +595,9 @@ services:
       timeout: 10s
       retries: 3
 
+  # ============================================================
+  # Telegram Bot - Администрирование
+  # ============================================================
   n8n-bot:
     build:
       context: ./bot
@@ -388,6 +608,14 @@ services:
       - TG_BOT_TOKEN=${TG_BOT_TOKEN}
       - TG_USER_ID=${TG_USER_ID}
       - N8N_DIR=/opt/n8n
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - DOMAIN=${DOMAIN}
+      - PGADMIN_DOMAIN=${PGADMIN_DOMAIN}
+      - REDIS_DOMAIN=${REDIS_DOMAIN}
+      - TZ=${TZ}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /opt/n8n:/opt/n8n:ro
@@ -403,12 +631,43 @@ networks:
 
 volumes:
   n8n_data:
+    driver: local
   postgres_data:
+    driver: local
   redis_data:
+    driver: local
+  pgadmin_data:
+    driver: local
   traefik_certs:
+    driver: local
 COMPOSE_EOF
 
 log_success "docker-compose.yml создан"
+
+# ============================================================
+# Создание конфигурации pgAdmin
+# ============================================================
+log_info "Создание конфигурации pgAdmin..."
+mkdir -p "$INSTALL_DIR/configs/pgadmin"
+
+cat > "$INSTALL_DIR/configs/pgadmin/servers.json" << 'PGADMIN_EOF'
+{
+  "Servers": {
+    "1": {
+      "Name": "n8n PostgreSQL",
+      "Group": "n8n",
+      "Host": "n8n-postgres",
+      "Port": 5432,
+      "MaintenanceDB": "n8n",
+      "Username": "n8n",
+      "SSLMode": "prefer",
+      "Comment": "n8n production database"
+    }
+  }
+}
+PGADMIN_EOF
+
+log_success "Конфигурация pgAdmin создана"
 
 # ============================================================
 # Создание Dockerfile.n8n
@@ -1040,15 +1299,29 @@ echo ""
 docker compose ps
 
 echo ""
-log_success "n8n доступен по адресу: https://${DOMAIN}"
-log_success "Telegram бот запущен и готов к работе"
+log_success "╔════════════════════════════════════════════════════════╗"
+log_success "║          n8n установлен и готов к работе!              ║"
+log_success "╚════════════════════════════════════════════════════════╝"
 echo ""
-echo "Полезные команды:"
-echo "  cd $INSTALL_DIR"
-echo "  docker compose ps          # Статус контейнеров"
-echo "  docker compose logs -f n8n # Логи n8n"
-echo "  ./update_n8n.sh            # Обновить n8n"
-echo "  ./backup_n8n.sh            # Создать бэкап"
+echo "🌐 Веб-интерфейсы:"
+echo "   • n8n:            https://${DOMAIN}"
+echo "   • pgAdmin:        https://${PGADMIN_DOMAIN}"
+echo "     Логин:          ${EMAIL}"
+echo "     Пароль:         ${PGADMIN_PASSWORD}"
+echo ""
+echo "   • Redis Commander: https://${REDIS_DOMAIN}"
+echo "     Логин:          admin"
+echo "     Пароль:         ${REDIS_UI_PASSWORD}"
+echo ""
+echo "🤖 Telegram бот запущен и готов к работе"
+echo ""
+echo "📝 Полезные команды:"
+echo "   cd $INSTALL_DIR"
+echo "   docker compose ps          # Статус контейнеров"
+echo "   docker compose logs -f n8n # Логи n8n"
+echo "   ./update_n8n.sh            # Обновить n8n"
+echo "   ./backup_n8n.sh            # Создать бэкап"
+echo "   ./restore_n8n.sh <файл>    # Восстановить из бэкапа"
 echo ""
 
 # Отправка уведомления в Telegram
@@ -1058,10 +1331,16 @@ if [ -n "$TG_BOT_TOKEN" ] && [ -n "$TG_USER_ID" ]; then
 
     if curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
         -d "chat_id=${TG_USER_ID}" \
-        -d "text=✅ n8n успешно установлен!
+        -d "text=✅ *n8n v3+ успешно установлен!*
 
-🌐 URL: https://${DOMAIN}
-📦 Версия: ${N8N_VERSION}
+🌐 *Веб-интерфейсы:*
+• n8n: https://${DOMAIN}
+• pgAdmin: https://${PGADMIN_DOMAIN}
+• Redis: https://${REDIS_DOMAIN}
+
+📦 Версия n8n: ${N8N_VERSION}
+
+🔐 *Пароли сохранены в .env файле*
 
 Используйте /start для просмотра команд бота." \
         -d "parse_mode=Markdown" > /dev/null 2>&1; then
