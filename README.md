@@ -463,7 +463,7 @@ docker compose up -d
 ## 📞 Поддержка
 
 - Issues: [GitHub Issues](https://github.com/kalibrrbilak/n8n-install/issues)
-- Telegram: [@kalibr_rbilak](https://t.me/kalibr_rbilak)
+- Telegram: [@websansay](https://t.me/websansay)
 
 ## 📜 Лицензия
 
