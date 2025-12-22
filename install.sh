@@ -694,16 +694,7 @@ RUN echo "━━━━━━━━━━━━━━━━━━━━━━━�
     echo "💰 Донаты: https://boosty.to/websansay" && \
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Alpine репозитории + апдейт
-RUN set -eux; \
-  printf '%s\n' \
-    "https://dl-cdn.alpinelinux.org/alpine/v3.22/main" \
-    "https://dl-cdn.alpinelinux.org/alpine/v3.22/community" \
-  > /etc/apk/repositories; \
-  apk update; \
-  apk upgrade --no-cache
-
-# Системные пакеты (ffmpeg включён) + docker-cli для docker logs внутри контейнера
+# Системные пакеты (используем репозитории базового образа)
 RUN apk add --no-cache \
   bash \
   curl \
@@ -741,7 +732,7 @@ RUN set -eux; \
 # Чуть ускорим npm
 RUN npm config set fund false && npm config set audit false
 
-# npm-глобалки (оставляем все как у тебя было)
+# npm-глобалки
 RUN echo "" && \
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
     echo "📦 Устанавливаю 30+ npm пакетов для AI, ботов и автоматизации..." && \
@@ -796,7 +787,7 @@ RUN for pkg in \
 # Локально — для доступности в Code-нодах
 RUN npm install oauth-1.0a
 
-# Puppeteer конфигурация для headless browser (chromium установится через зависимости puppeteer)
+# Puppeteer конфигурация
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV CHROME_PATH=/usr/bin/chromium-browser
