@@ -607,7 +607,7 @@ services:
     environment:
       - TG_BOT_TOKEN=${TG_BOT_TOKEN}
       - TG_USER_ID=${TG_USER_ID}
-      - N8N_DIR=/opt/n8n
+      - N8N_DIR=/opt/main
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
@@ -618,7 +618,7 @@ services:
       - TZ=${TZ}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /opt/n8n:/opt/n8n:ro
+      - /opt/main:/opt/main:ro
       - ./logs:/logs
     networks:
       - n8n-network
