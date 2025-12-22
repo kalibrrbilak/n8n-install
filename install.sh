@@ -407,70 +407,97 @@ print_header "Шаг 7/7: Установка компонентов"
 
 # --- Обновление системы ---
 print_step "Обновление системы..."
-{
-    apt-get update -qq
-    apt-get upgrade -y -qq
-} >> "$LOG_FILE" 2>&1 &
-spinner $!
+apt-get update -qq >> "$LOG_FILE" 2>&1 || true
+apt-get upgrade -y -qq >> "$LOG_FILE" 2>&1 || true
 print_success "Система обновлена"
 
 # --- Установка зависимостей ---
 print_step "Установка зависимостей..."
-{
-    apt-get install -y -qq \
-        apt-transport-https \
-        ca-certificates \
-        curl \
-        gnupg \
-        lsb-release \
-        git \
-        jq \
-        wget \
-        unzip \
-        openssl \
-        software-properties-common
-} >> "$LOG_FILE" 2>&1 &
-spinner $!
-print_success "Зависимости установлены"
+apt-get install -y -qq \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release \
+    git \
+    jq \
+    wget \
+    unzip \
+    openssl \
+    software-properties-common >> "$LOG_FILE" 2>&1
+if [ $? -eq 0 ]; then
+    print_success "Зависимости установлены"
+else
+    print_error "Ошибка установки зависимостей"
+    exit 1
+fi
 
 # --- Установка Node.js 20+ ---
 print_step "Установка Node.js 20..."
-{
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y -qq nodejs
-} >> "$LOG_FILE" 2>&1 &
-spinner $!
+curl -fsSL https://deb.nodesource.com/setup_20.x 2>> "$LOG_FILE" | bash - >> "$LOG_FILE" 2>&1
+apt-get install -y -qq nodejs >> "$LOG_FILE" 2>&1
 NODE_VERSION=$(node --version 2>/dev/null || echo "N/A")
-print_success "Node.js установлен: $NODE_VERSION"
+if [ "$NODE_VERSION" != "N/A" ]; then
+    print_success "Node.js установлен: $NODE_VERSION"
+else
+    print_warning "Node.js не установлен, продолжаем..."
+fi
 
 # --- Установка Docker ---
 print_step "Установка Docker Engine..."
-{
-    # Удаление старых версий
-    for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
-        apt-get remove -y -qq $pkg 2>/dev/null || true
-    done
 
-    # Добавление репозитория Docker
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-    chmod a+r /etc/apt/keyrings/docker.asc
+# Удаление старых версий
+print_info "  Удаление старых версий Docker..."
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do
+    apt-get remove -y -qq $pkg >> "$LOG_FILE" 2>&1 || true
+done
 
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-    $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
-    tee /etc/apt/sources.list.d/docker.list > /dev/null
+# Добавление репозитория Docker
+print_info "  Добавление репозитория Docker..."
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc 2>> "$LOG_FILE"
+chmod a+r /etc/apt/keyrings/docker.asc
 
-    apt-get update -qq
-    apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+tee /etc/apt/sources.list.d/docker.list > /dev/null
 
-    # Перезагрузка systemd для применения прокси
-    systemctl daemon-reload
-    systemctl enable docker
-    systemctl restart docker
-} >> "$LOG_FILE" 2>&1 &
-spinner $!
+apt-get update -qq >> "$LOG_FILE" 2>&1
+
+# Установка Docker
+print_info "  Установка Docker CE (это может занять несколько минут)..."
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >> "$LOG_FILE" 2>&1
+
+if [ $? -ne 0 ]; then
+    print_error "Ошибка установки Docker"
+    exit 1
+fi
+
+# Перезагрузка systemd для применения прокси
+print_info "  Настройка Docker службы..."
+systemctl daemon-reload >> "$LOG_FILE" 2>&1
+systemctl enable docker >> "$LOG_FILE" 2>&1
+systemctl restart docker >> "$LOG_FILE" 2>&1
+
+# Ожидание запуска Docker
+sleep 3
+
 DOCKER_VERSION=$(docker --version 2>/dev/null || echo "N/A")
-print_success "Docker установлен: $DOCKER_VERSION"
+if [ "$DOCKER_VERSION" != "N/A" ]; then
+    print_success "Docker установлен: $DOCKER_VERSION"
+else
+    print_error "Docker не установлен! Проверьте лог: $LOG_FILE"
+    exit 1
+fi
+
+# Проверка Docker Compose plugin
+COMPOSE_VERSION=$(docker compose version 2>/dev/null || echo "N/A")
+if [ "$COMPOSE_VERSION" != "N/A" ]; then
+    print_success "Docker Compose: $COMPOSE_VERSION"
+else
+    print_error "Docker Compose plugin не установлен!"
+    exit 1
+fi
 
 # --- Добавление пользователя в группу docker ---
 print_step "Настройка прав Docker..."
@@ -1342,24 +1369,28 @@ chmod +x "$INSTALL_DIR/backup_n8n.sh"
 print_success "Скрипт бэкапа создан"
 
 # --- Сборка и запуск контейнеров ---
-print_step "Сборка Docker образов..."
-{
-    cd "$INSTALL_DIR"
-    docker compose build
-} >> "$LOG_FILE" 2>&1 &
-spinner $!
+print_step "Сборка Docker образов (это может занять 5-10 минут)..."
+cd "$INSTALL_DIR"
+
+# Сборка образов
+docker compose build >> "$LOG_FILE" 2>&1
+if [ $? -ne 0 ]; then
+    print_error "Ошибка сборки Docker образов! Проверьте лог: $LOG_FILE"
+    exit 1
+fi
 print_success "Образы собраны"
 
 print_step "Запуск контейнеров..."
-{
-    cd "$INSTALL_DIR"
-    if [[ "$USE_TG_BOT" == "true" ]]; then
-        docker compose --profile bot up -d
-    else
-        docker compose up -d
-    fi
-} >> "$LOG_FILE" 2>&1 &
-spinner $!
+if [[ "$USE_TG_BOT" == "true" ]]; then
+    docker compose --profile bot up -d >> "$LOG_FILE" 2>&1
+else
+    docker compose up -d >> "$LOG_FILE" 2>&1
+fi
+
+if [ $? -ne 0 ]; then
+    print_error "Ошибка запуска контейнеров! Проверьте лог: $LOG_FILE"
+    exit 1
+fi
 print_success "Контейнеры запущены"
 
 # Ожидание запуска n8n
