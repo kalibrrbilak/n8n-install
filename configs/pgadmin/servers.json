@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "n8n PostgreSQL",
+      "Group": "n8n",
+      "Host": "n8n-postgres",
+      "Port": 5432,
+      "MaintenanceDB": "n8n",
+      "Username": "n8n",
+      "SSLMode": "prefer",
+      "Comment": "n8n production database"
+    }
+  }
+}
