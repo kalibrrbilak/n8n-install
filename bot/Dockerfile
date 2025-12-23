@@ -1,7 +1,7 @@
 FROM node:20-alpine
 
 # Установка Docker CLI для управления контейнерами
-RUN apk add --no-cache docker-cli bash curl
+RUN apk add --no-cache docker-cli bash curl openssl tar
 
 WORKDIR /app
 
