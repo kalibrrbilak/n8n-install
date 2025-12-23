@@ -195,11 +195,11 @@ services:
   # Traefik - Reverse Proxy + SSL
   # ============================================================
   n8n-traefik:
-    image: traefik:v3.2
+    image: traefik:v2.11
     container_name: n8n-traefik
     restart: unless-stopped
     command:
-      - "--api.dashboard=false"
+      - "--api.insecure=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
