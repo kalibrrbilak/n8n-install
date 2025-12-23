@@ -19,6 +19,39 @@ log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# ============================================================
+# Configure n8n 2.x file system security
+# ============================================================
+configure_n8n_security() {
+    local install_dir="$1"
+
+    log_info "Настройка безопасности файловой системы n8n 2.x..."
+
+    # Создаём директории для Read/Write Binary Files нод
+    mkdir -p "$install_dir/n8n-files"  # Стандартная sandbox-зона n8n v2
+    mkdir -p "$install_dir/data"        # Кастомная рабочая папка проекта
+
+    # Устанавливаем владельца (UID:GID = 1000:1000 - пользователь node в контейнере)
+    chown -R 1000:1000 "$install_dir/n8n-files"
+    chown -R 1000:1000 "$install_dir/data"
+
+    # Устанавливаем права (полный доступ для владельца и группы)
+    chmod -R u+rwX,g+rwX "$install_dir/n8n-files"
+    chmod -R u+rwX,g+rwX "$install_dir/data"
+
+    # Добавляем volumes в docker-compose.yml для n8n сервиса
+    # Ищем строку "- n8n_data:/home/node/.n8n" и добавляем после неё новые volumes
+    sed -i '/- n8n_data:\/home\/node\/.n8n/a\      - ./n8n-files:/home/node/.n8n-files  # n8n 2.x sandbox zone\n      - ./data:/data                        # Custom working directory' "$install_dir/docker-compose.yml"
+
+    # Добавляем environment переменные для n8n 2.x в docker-compose.yml
+    # Ищем строку с N8N_PERSONALIZATION_ENABLED и добавляем после неё новые переменные
+    sed -i '/- N8N_PERSONALIZATION_ENABLED=/a\      # n8n 2.x - File System Security\n      - NODES_EXCLUDE=${NODES_EXCLUDE}\n      - N8N_RESTRICT_FILE_ACCESS_TO=${N8N_RESTRICT_FILE_ACCESS_TO}\n      # n8n 2.x - Task Runners\n      - N8N_RUNNERS_ENABLED=${N8N_RUNNERS_ENABLED}' "$install_dir/docker-compose.yml"
+
+    log_success "Файловые зоны n8n 2.x созданы:"
+    log_info "  • $install_dir/n8n-files (стандартная зона n8n v2)"
+    log_info "  • $install_dir/data (кастомная рабочая папка)"
+}
+
 # Проверка root
 if [[ $EUID -ne 0 ]]; then
     log_error "Скрипт должен быть запущен от root"
@@ -643,6 +676,9 @@ volumes:
 COMPOSE_EOF
 
 log_success "docker-compose.yml создан"
+
+# Configure n8n 2.x file system security
+configure_n8n_security "$INSTALL_DIR"
 
 # ============================================================
 # Создание конфигурации pgAdmin
