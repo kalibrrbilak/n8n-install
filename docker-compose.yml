@@ -6,6 +6,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.n8n
+      args:
+        - N8N_VERSION=${N8N_VERSION}
     container_name: n8n
     restart: unless-stopped
     environment:

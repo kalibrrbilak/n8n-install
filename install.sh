@@ -731,10 +731,6 @@ log_success "Конфигурация pgAdmin создана"
 # ============================================================
 log_info "Создание Dockerfile.n8n..."
 cat > "$INSTALL_DIR/Dockerfile.n8n" << 'DOCKERFILE_EOF'
-FROM n8nio/n8n:latest
-
-USER root
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 🚀 n8n SUPER BUILD - AI/ML + Автоматизация
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -744,6 +740,12 @@ USER root
 # 💰 Поддержать проект: https://boosty.to/websansay
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+FROM node:18-bullseye-slim
+
+ARG N8N_VERSION
+
+USER root
+
 RUN echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
     echo "🚀 n8n SUPER BUILD - Начинаем сборку!" && \
     echo "👨‍💻 by WebSansay | TG: https://t.me/websansay" && \
@@ -751,44 +753,49 @@ RUN echo "━━━━━━━━━━━━━━━━━━━━━━━�
     echo "💰 Донаты: https://boosty.to/websansay" && \
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Системные пакеты (Alpine Linux - используем apk)
-RUN apk add --no-cache \
+# Системные пакеты (Debian/Ubuntu)
+RUN apt-get update && apt-get install -y --no-install-recommends \
   bash \
   curl \
   git \
-  make \
-  g++ \
-  gcc \
+  build-essential \
   python3 \
-  py3-pip \
+  python3-pip \
   libffi-dev \
   apache2-utils \
   ffmpeg \
-  docker-cli \
   chromium \
-  chromium-chromedriver \
-  font-noto \
-  font-noto-cjk \
-  font-noto-emoji \
+  chromium-driver \
+  fonts-noto \
+  fonts-noto-cjk \
+  fonts-noto-color-emoji \
   imagemagick \
   ghostscript \
   graphicsmagick \
   poppler-utils \
   tesseract-ocr \
-  tesseract-ocr-data-rus \
-  tesseract-ocr-data-eng \
-  jq
+  tesseract-ocr-rus \
+  tesseract-ocr-eng \
+  jq \
+  docker.io \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
 
-# (опционально) Создать группу docker и добавить пользователя node
+# Создать группу docker и добавить пользователя node
 ARG DOCKER_GID=999
-RUN set -eux; \
-  addgroup -S -g ${DOCKER_GID} docker || addgroup -S docker; \
-  adduser node docker || true
+RUN groupadd -f -g ${DOCKER_GID} docker && usermod -aG docker node || true
 
-# Чуть ускорим npm
+# npm конфигурация
 RUN npm config set fund false && npm config set audit false
 
-# npm-глобалки
+# Установка n8n глобально
+RUN echo "" && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    echo "📦 Устанавливаю n8n версии ${N8N_VERSION}..." && \
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
+    npm install -g n8n@${N8N_VERSION}
+
+# npm-глобалки для AI, ботов и автоматизации
 RUN echo "" && \
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
     echo "📦 Устанавливаю 30+ npm пакетов для AI, ботов и автоматизации..." && \
@@ -805,7 +812,6 @@ RUN for pkg in \
     date-fns \
     lodash \
     fs-extra \
-    path \
     csv-parser \
     xml2js \
     js-yaml \
@@ -840,13 +846,10 @@ RUN for pkg in \
     echo "🔧 Устанавливаем $pkg..." && npm install -g "$pkg" || echo "⚠️ Не удалось установить $pkg, продолжаем..."; \
   done
 
-# Локально — для доступности в Code-нодах
-RUN npm install oauth-1.0a
-
 # Puppeteer конфигурация
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-ENV CHROME_PATH=/usr/bin/chromium-browser
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV CHROME_PATH=/usr/bin/chromium
 
 # n8n конфигурация
 ENV N8N_USER_FOLDER=/home/node/.n8n
@@ -855,14 +858,15 @@ USER node
 
 WORKDIR /home/node
 
-# КРИТИЧНО: НЕ переопределяем CMD/ENTRYPOINT - используем из базового образа n8nio/n8n
-# Базовый образ имеет правильный entrypoint для запуска n8n
+# Точка входа - n8n
+ENTRYPOINT ["n8n"]
 
 RUN echo "" && \
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" && \
     echo "✅ n8n SUPER BUILD завершён успешно!" && \
     echo "" && \
     echo "🎉 Готовы к работе:" && \
+    echo "   • n8n версии ${N8N_VERSION}" && \
     echo "   • OpenAI, TensorFlow, LangChain (AI/ML)" && \
     echo "   • Telegram, Discord, VK, WhatsApp боты" && \
     echo "   • FFmpeg, ImageMagick, Tesseract OCR" && \
