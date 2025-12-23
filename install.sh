@@ -81,7 +81,7 @@ echo -e "\033[0m"  # Reset
 echo ""
 echo -e "\033[32m           +2V\033[0m"  # Green
 echo ""
-echo -e "\033[36mby \033[34mKalininLive \033[35m@WebSansay\033[0m"  # Cyan → Blue → Magenta
+echo -e "\033[36mby \033[35m@WebSansay\033[0m"  # Gradient cyan→magenta
 echo ""
 
 echo ""
