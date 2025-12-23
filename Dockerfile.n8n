@@ -18,38 +18,39 @@ RUN echo "━━━━━━━━━━━━━━━━━━━━━━━�
     echo "💰 Донаты: https://boosty.to/websansay" && \
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Системные пакеты (Debian/Ubuntu - используем apt-get)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Системные пакеты (Alpine Linux - используем apk)
+RUN apk add --no-cache \
   bash \
   curl \
   git \
-  build-essential \
+  make \
+  g++ \
+  gcc \
   python3 \
-  python3-pip \
+  py3-pip \
   libffi-dev \
   apache2-utils \
   ffmpeg \
+  docker-cli \
   chromium \
-  chromium-driver \
-  fonts-noto \
-  fonts-noto-cjk \
-  fonts-noto-color-emoji \
+  chromium-chromedriver \
+  font-noto \
+  font-noto-cjk \
+  font-noto-emoji \
   imagemagick \
   ghostscript \
   graphicsmagick \
   poppler-utils \
   tesseract-ocr \
-  tesseract-ocr-rus \
-  tesseract-ocr-eng \
-  jq \
-  docker.io && \
-  apt-get clean && \
-  rm -rf /var/lib/apt/lists/*
+  tesseract-ocr-data-rus \
+  tesseract-ocr-data-eng \
+  jq
 
 # Создать группу docker и добавить пользователя node
 ARG DOCKER_GID=999
-RUN groupadd -g ${DOCKER_GID} docker || true && \
-    usermod -aG docker node || true
+RUN set -eux; \
+  addgroup -S -g ${DOCKER_GID} docker || addgroup -S docker; \
+  adduser node docker || true
 
 # Чуть ускорим npm
 RUN npm config set fund false && npm config set audit false
