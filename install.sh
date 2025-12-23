@@ -80,7 +80,7 @@ EOF
 echo -e "${NC}"
 echo -e "${GREEN}           +2V${NC}"
 echo ""
-echo -e "           ${YELLOW}by ${RED}@${GREEN}WebSansay${NC}"
+echo -e "      ${RED}by ${GREEN}@Николай ${YELLOW}KalininLive ${BLUE}@WebSansay${NC}"
 echo ""
 
 echo ""
