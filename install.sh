@@ -985,6 +985,7 @@ bot.onText(/\/start/, (msg) => {
 /update - Обновить n8n до последней версии
 /backups - Создать резервную копию
 /restart - Перезапустить n8n
+/urls - Показать адреса всех веб-интерфейсов
 /help - Показать эту справку
     `;
     bot.sendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' });
@@ -1172,6 +1173,37 @@ bot.onText(/\/backups?/, async (msg) => {
     } catch (error) {
         await bot.sendMessage(chatId, `❌ Ошибка создания бэкапа: ${error.message}`);
     }
+});
+
+// /urls - Показать адреса всех веб-интерфейсов
+bot.onText(/\/urls/, async (msg) => {
+    if (!isAuthorized(msg)) return;
+
+    const chatId = msg.chat.id;
+
+    const DOMAIN = process.env.DOMAIN || 'не настроен';
+    const PGADMIN_DOMAIN = process.env.PGADMIN_DOMAIN || 'не настроен';
+    const REDIS_DOMAIN = process.env.REDIS_DOMAIN || 'не настроен';
+
+    const urlsText = `
+🌐 *Адреса всех веб-интерфейсов*
+
+*n8n (главное приложение):*
+https://${DOMAIN}
+
+*pgAdmin (UI для PostgreSQL):*
+https://${PGADMIN_DOMAIN}
+
+*Redis Commander (UI для Redis):*
+https://${REDIS_DOMAIN}
+
+📝 *Примечание:*
+- Все сервисы защищены SSL сертификатами
+- PostgreSQL и Redis напрямую недоступны из интернета
+- Доступ возможен только через веб-интерфейсы
+    `;
+
+    await bot.sendMessage(chatId, urlsText, { parse_mode: 'Markdown' });
 });
 
 // Обработка ошибок
